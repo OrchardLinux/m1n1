@@ -960,6 +960,48 @@ static int dt_set_touchscreen(void)
     return 0;
 }
 
+/*
+ * Ambient light sensor calibration (LSCI). iBoot resolves the ADT's
+ * "syscfg/LSCI" reference into the unit's record before m1n1 runs; the
+ * sensor sits below an I2C bus (e.g. /arm-io/i2c2/als1).
+ */
+static int dt_set_als(void)
+{
+    const char *path = fdt_get_alias(dt, "als0");
+    if (path == NULL)
+        return 0;
+
+    int node = fdt_path_offset(dt, path);
+    if (node < 0)
+        bail("FDT: als0 alias points at nonexistent node\n");
+
+    int arm_io = adt_path_offset(adt, "/arm-io");
+    if (arm_io < 0)
+        return 0;
+
+    int bus = arm_io;
+    ADT_FOREACH_CHILD(adt, bus)
+    {
+        int anode = bus;
+        ADT_FOREACH_CHILD(adt, anode)
+        {
+            u32 len;
+            const u8 *blob = adt_getprop(adt, anode, "alsCalibration", &len);
+            if (!blob)
+                continue;
+            if (!len || (len >= 7 && !memcmp(blob, "syscfg/", 7))) {
+                printf("ADT: ambient light sensor calibration not provisioned\n");
+                return 0;
+            }
+            if (fdt_setprop(dt, node, "apple,als-calibration", blob, len) < 0)
+                bail("FDT: failed to set apple,als-calibration\n");
+            return 0;
+        }
+    }
+    printf("ADT: ambient light sensor not found\n");
+    return 0;
+}
+
 static int dt_set_multitouch(void)
 {
     const char *path = fdt_get_alias(dt, "touchbar0");
@@ -3076,6 +3118,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_set_gpu(dt))
         return -1;
     if (dt_set_multitouch())
+        return -1;
+    if (dt_set_als())
         return -1;
     if (dt_set_sep())
         return -1;
