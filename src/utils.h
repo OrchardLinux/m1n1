@@ -267,7 +267,7 @@ static inline void write64_lo_hi(u64 addr, u64 val)
 #define __mrs(reg)                                                                                 \
     ({                                                                                             \
         u64 val;                                                                                   \
-        __asm__ volatile("mrs\t%0, " #reg : "=r"(val));                                            \
+        __asm__ volatile(".arch " ASM_ARCH "\nmrs\t%0, " #reg : "=r"(val));                        \
         val;                                                                                       \
     })
 #define _mrs(reg) __mrs(reg)
@@ -275,7 +275,7 @@ static inline void write64_lo_hi(u64 addr, u64 val)
 #define __msr(reg, val)                                                                            \
     ({                                                                                             \
         u64 __val = (u64)val;                                                                      \
-        __asm__ volatile("msr\t" #reg ", %0" : : "r"(__val));                                      \
+        __asm__ volatile(".arch " ASM_ARCH "\nmsr\t" #reg ", %0" : : "r"(__val));                  \
     })
 #define _msr(reg, val) __msr(reg, val)
 
@@ -487,6 +487,7 @@ extern u32 board_id, chip_id;
 enum cpufeat_sleep_mode {
     SLEEP_NONE,
     SLEEP_LEGACY,
+    SLEEP_CLUSTER,
     SLEEP_GLOBAL,
 };
 
@@ -510,6 +511,7 @@ struct midr_part_features {
     bool amx;
     bool actlr_el2;
     bool counter_redirect;
+    bool impl_status;
 };
 
 extern bool is_mac;
@@ -527,4 +529,8 @@ bool supports_gxf(void);
 bool supports_pan(void);
 u64 top_of_memory_alloc(size_t size);
 
+bool main_storage_init(void);
+bool main_storage_read(u64 lba, u64 *bfr);
+void main_storage_shutdown(void);
+bool main_storage_flush(void);
 #endif

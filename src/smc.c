@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "adt.h"
 #include "assert.h"
 #include "malloc.h"
+#include "pmgr.h"
 #include "smc.h"
 #include "string.h"
 #include "types.h"
@@ -28,14 +30,13 @@
 
 #define SMC_NUM_IDS 16
 
-#define SMC_ENDPOINT 0x20
-
 struct smc_dev {
     asc_dev_t *asc;
     rtkit_dev_t *rtkit;
 
     void *shmem;
     u32 msgid;
+    u8 ep;
 
     bool outstanding[SMC_NUM_IDS];
     u64 ret[SMC_NUM_IDS];
@@ -70,7 +71,7 @@ static int smc_work(smc_dev_t *smc)
         return ret;
     }
 
-    if (msg.ep != SMC_ENDPOINT) {
+    if (msg.ep != smc->ep) {
         printf("SMC: received message for unexpected endpoint 0x%02x\n", msg.ep);
         return 0;
     }
@@ -84,7 +85,7 @@ static void smc_send(smc_dev_t *smc, u64 message)
 {
     struct rtkit_message msg;
 
-    msg.ep = SMC_ENDPOINT;
+    msg.ep = smc->ep;
     msg.msg = message;
 
     rtkit_send(smc->rtkit, &msg);
@@ -120,11 +121,24 @@ void smc_shutdown(smc_dev_t *smc)
     free(smc);
 }
 
+void smc_power_on(void)
+{
+    if (chip_id != T8015 && chip_id != T8012)
+        return;
+
+    pmgr_power_on(0, "SMC_I2CM1");
+    pmgr_power_on(0, "SMC_FABRIC");
+    pmgr_adt_power_enable("/arm-io/smc");
+}
+
 smc_dev_t *smc_init(void)
 {
     smc_dev_t *smc = calloc(1, sizeof(smc_dev_t));
     if (!smc)
         return NULL;
+
+    if (chip_id == T8015 || chip_id == T8012)
+        smc_power_on();
 
     smc->asc = asc_init("/arm-io/smc");
     if (!smc->asc) {
@@ -132,7 +146,7 @@ smc_dev_t *smc_init(void)
         goto out_free;
     }
 
-    smc->rtkit = rtkit_init("smc", smc->asc, NULL, NULL, NULL, true);
+    smc->rtkit = rtkit_init_asc("smc", smc->asc, NULL, NULL, NULL, true, 0, NULL);
     if (!smc->rtkit) {
         printf("SMC: failed to initialize RTKit\n");
         goto out_asc;
@@ -143,7 +157,12 @@ smc_dev_t *smc_init(void)
         goto out_rtkit;
     }
 
-    if (!rtkit_start_ep(smc->rtkit, SMC_ENDPOINT)) {
+    if (rtkit_protocol_version(smc->rtkit) > 10)
+        smc->ep = 0x20;
+    else
+        smc->ep = 0x6;
+
+    if (!rtkit_start_ep(smc->rtkit, smc->ep)) {
         printf("SMC: failed start SMC endpoint\n");
         goto out_rtkit;
     }

@@ -56,13 +56,15 @@ QUIET :=
 endif
 endif
 
+ASM_ARCH := armv8.2-a
+
 BASE_CFLAGS := -O2 -Wall -g -Wundef -Werror=strict-prototypes -fno-common -fno-PIE \
 	-Werror=implicit-function-declaration -Werror=implicit-int \
 	-Wsign-compare -Wunused-parameter -Wno-multichar \
 	-ffreestanding -fpic -ffunction-sections -fdata-sections \
 	-nostdinc -isystem $(shell $(CC) -print-file-name=include) -isystem sysinc \
 	-Isrc \
-	-fno-stack-protector -mstrict-align -march=armv8.2-a \
+	-fno-stack-protector -mstrict-align -Wa,-march=$(ASM_ARCH) -DASM_ARCH=\"$(ASM_ARCH)\" \
 	$(EXTRA_CFLAGS)
 
 CFLAGS := $(BASE_CFLAGS) -mgeneral-regs-only
@@ -125,6 +127,8 @@ OBJECTS := \
 	adt.o \
 	afk.o \
 	aic.o \
+	akf.o akf_fw.o \
+	ans1.o \
 	asc.o \
 	bootlogo_48.o bootlogo_128.o bootlogo_256.o \
 	chainload.o \
@@ -175,7 +179,7 @@ OBJECTS := \
 	tps6598x.o \
 	uart.o \
 	uartproxy.o \
-	usb.o usb_dwc3.o \
+	usb.o usb_dwc3.o usb_dwc2.o \
 	utils.o utils_asm.o \
 	vsprintf.o \
 	wdt.o \
@@ -190,18 +194,22 @@ FP_OBJECTS := \
 	math/powf.o \
 	math/powf_data.o
 
+MONITOR_OBJS := build/monitor_stub.o
+
 BUILD_OBJS := $(patsubst %,build/%,$(OBJECTS))
 BUILD_FP_OBJS := $(patsubst %,build/%,$(FP_OBJECTS))
 BUILD_RUST_LIB := $(patsubst %,build/%,$(RUST_LIB))
 BUILD_ALL_OBJS := $(BUILD_OBJS) $(BUILD_FP_OBJS) $(BUILD_RUST_LIB)
 NAME := m1n1
 TARGET := m1n1.macho
+TARGET_IDEVICE := m1n1-idevice.macho
+TARGET_MONITOR := monitor-stub.macho
 TARGET_RAW := m1n1.bin
 
 DEPDIR := build/.deps
 
 .PHONY: all clean format invoke_cc always_rebuild
-all: build/$(TARGET) build/$(TARGET_RAW)
+all: build/$(TARGET) build/$(TARGET_IDEVICE) build/$(TARGET_MONITOR) build/$(TARGET_RAW)
 clean:
 	rm -rf build/* build/.deps
 format:
@@ -246,11 +254,27 @@ build/$(NAME).elf: $(BUILD_ALL_OBJS) m1n1.ld
 	$(QUIET)echo "  LD    $@"
 	$(QUIET)$(LD) -T m1n1.ld $(LDFLAGS) -o $@ $(BUILD_ALL_OBJS)
 
+build/$(NAME)-idevice.elf: $(BUILD_ALL_OBJS) m1n1-idevice.ld
+	$(QUIET)echo "  LD    $@"
+	$(QUIET)$(LD) -T m1n1-idevice.ld $(LDFLAGS) -o $@ $(BUILD_ALL_OBJS)
+
+build/monitor-stub.elf: $(MONITOR_OBJS) monitor-stub.ld
+	$(QUIET)echo "  LD    $@"
+	$(QUIET)$(LD) -T  monitor-stub.ld $(LDFLAGS) -o $@ $(MONITOR_OBJS)
+
 build/$(NAME)-raw.elf: $(BUILD_ALL_OBJS) m1n1-raw.ld
 	$(QUIET)echo "  LDRAW $@"
 	$(QUIET)$(LD) -T m1n1-raw.ld $(LDFLAGS) -o $@ $(BUILD_ALL_OBJS)
 
 build/$(NAME).macho: build/$(NAME).elf
+	$(QUIET)echo "  MACHO $@"
+	$(QUIET)$(OBJCOPY) -O binary --strip-debug $< $@
+
+build/$(NAME)-idevice.macho: build/$(NAME)-idevice.elf
+	$(QUIET)echo "  MACHO $@"
+	$(QUIET)$(OBJCOPY) -O binary --strip-debug $< $@
+
+build/monitor-stub.macho: build/monitor-stub.elf
 	$(QUIET)echo "  MACHO $@"
 	$(QUIET)$(OBJCOPY) -O binary --strip-debug $< $@
 
