@@ -932,6 +932,7 @@ static int dt_set_touchscreen(void)
         {"firefly-p100-calibration", "apple,z2-firefly-p100-cal-blob"},
         {"ext-multi-touch-calibration", "apple,z2-ext-cal-blob"},
         {"pressure-effect-correction", "apple,z2-pressure-cal-blob"},
+        {"prox-calibration", "apple,z2-prox-cal-blob"},
     };
     const char *path = fdt_get_alias(dt, "touchscreen0");
     if (path == NULL)
