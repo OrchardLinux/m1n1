@@ -616,7 +616,12 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             main_storage_shutdown();
             break;
         case P_MAIN_STORAGE_READ:
-            reply->retval = main_storage_read(request->args[0], (void *)request->args[1]);
+            /* args[2]: block count; 0 (older hosts) reads one block */
+            if (request->args[2] > 1)
+                reply->retval = main_storage_read_blocks(request->args[0], request->args[2],
+                                                         (void *)request->args[1]);
+            else
+                reply->retval = main_storage_read(request->args[0], (void *)request->args[1]);
             break;
         case P_MAIN_STORAGE_FLUSH:
             reply->retval = main_storage_flush();
