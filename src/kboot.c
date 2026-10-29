@@ -352,6 +352,34 @@ static int dt_set_uboot_config(void)
     return 0;
 }
 
+/*
+ * The ANS2 NVMe controller on A9-A11 uses a host memory buffer that iBoot
+ * already carved out. Publish it when the device tree asks for it.
+ */
+static int dt_set_nvme_hmb(void)
+{
+    u64 region[2];
+    fdt64_t reg[2];
+    int node = fdt_path_offset(dt, "/reserved-memory/nvme-hmb");
+    if (node < 0)
+        node = fdt_path_offset(dt, "nvme-hmb");
+    if (node < 0)
+        return 0;
+    int adt_node = adt_path_offset(adt, "/arm-io/nvme-mmu0");
+    if (adt_node < 0)
+        bail("ADT: /arm-io/nvme-mmu0 not found\n");
+    if (ADT_GETPROP_ARRAY(adt, adt_node, "sart-region", region) < 0 || !region[0] ||
+        !region[1] || (region[0] & 0xfffff) || (region[1] & 0xfffff) ||
+        region[0] + region[1] < region[0])
+        bail("ADT: invalid NVMe HMB region\n");
+    fdt64_st(&reg[0], region[0]);
+    fdt64_st(&reg[1], region[1]);
+    if (fdt_setprop(dt, node, "reg", reg, sizeof(reg)))
+        bail("FDT: failed to set NVMe HMB region\n");
+    printf("FDT: NVMe HMB at 0x%lx size 0x%lx\n", region[0], region[1]);
+    return 0;
+}
+
 static int dt_set_memory(void)
 {
     int anode = adt_path_offset(adt, "/chosen");
@@ -817,6 +845,33 @@ static int dt_set_mac_addresses(void)
     return 0;
 }
 
+/*
+ * Find an arm-io function node such as "wlan" or "bluetooth". Newer SoCs
+ * put it directly below /arm-io, while A9-A11 put it below the UART that
+ * talks to the module (e.g. /arm-io/uart2/wlan).
+ */
+static int adt_find_arm_io_function(const char *name)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/arm-io/%s", name);
+    int anode = adt_path_offset(adt, path);
+    if (anode >= 0)
+        return anode;
+
+    int arm_io = adt_path_offset(adt, "/arm-io");
+    if (arm_io < 0)
+        return arm_io;
+
+    int child = arm_io;
+    ADT_FOREACH_CHILD(adt, child)
+    {
+        anode = adt_subnode_offset(adt, child, name);
+        if (anode >= 0)
+            return anode;
+    }
+    return -1;
+}
+
 static int dt_set_bluetooth_cal(int anode, int node, const char *adt_name, const char *fdt_name)
 {
     u32 len;
@@ -834,14 +889,11 @@ static int dt_set_bluetooth_cal(int anode, int node, const char *adt_name, const
 static int dt_set_bluetooth(void)
 {
     int ret;
-    int anode = adt_path_offset(adt, "/arm-io/bluetooth");
+    int anode = adt_find_arm_io_function("bluetooth");
 
     if (anode < 0) {
-        /*
-         * t8012-based system does not have bluetooth, and on
-         * some other devices bluetooth is connected with UART.
-         */
-        printf("ADT: /arm-io/bluetooth not found\n");
+        /* t8012-based system does not have bluetooth. */
+        printf("ADT: bluetooth node not found\n");
         return 0;
     }
 
@@ -865,11 +917,53 @@ static int dt_set_bluetooth(void)
     return 0;
 }
 
+static int dt_set_touchscreen(void)
+{
+    static const struct {
+        const char *adt;
+        const char *fdt;
+    } calibrations[] = {
+        {"multi-touch-calibration", "apple,z2-cal-blob"},
+        {"orb-gap-cal", "apple,z2-orb-gap-cal-blob"},
+        {"orb-force-cal", "apple,z2-orb-force-cal-blob"},
+        {"shape-dynamic-accel-cal", "apple,z2-shape-accel-cal-blob"},
+        {"multitouch-to-display-offset", "apple,z2-display-offset-cal-blob"},
+        {"firefly-calibration", "apple,z2-firefly-cal-blob"},
+        {"firefly-p100-calibration", "apple,z2-firefly-p100-cal-blob"},
+        {"ext-multi-touch-calibration", "apple,z2-ext-cal-blob"},
+        {"pressure-effect-correction", "apple,z2-pressure-cal-blob"},
+    };
+    const char *path = fdt_get_alias(dt, "touchscreen0");
+    if (path == NULL)
+        return 0;
+
+    int node = fdt_path_offset(dt, path);
+    if (node < 0)
+        bail("FDT: touchscreen0 alias points at nonexistent node\n");
+
+    int anode = adt_find_arm_io_function("multi-touch");
+    if (anode < 0) {
+        printf("ADT: multi-touch node not found\n");
+        return 0;
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(calibrations); i++) {
+        u32 len;
+        const u8 *blob = adt_getprop(adt, anode, calibrations[i].adt, &len);
+        /* Unprovisioned units carry a "syscfg/..." reference instead of data. */
+        if (!blob || !len || (len >= 7 && !memcmp(blob, "syscfg/", 7)))
+            continue;
+        if (fdt_setprop(dt, node, calibrations[i].fdt, blob, len) < 0)
+            bail("FDT: failed to set %s\n", calibrations[i].fdt);
+    }
+    return 0;
+}
+
 static int dt_set_multitouch(void)
 {
     const char *path = fdt_get_alias(dt, "touchbar0");
     if (path == NULL)
-        return 0;
+        return dt_set_touchscreen();
 
     int node = fdt_path_offset(dt, path);
     if (node < 0)
@@ -998,20 +1092,16 @@ static int dt_set_nvram(void)
 
 static int dt_set_wifi(void)
 {
-    int anode = adt_path_offset(adt, "/arm-io/wlan");
+    int anode = adt_find_arm_io_function("wlan");
 
     if (anode < 0) {
         /*
          * t8012-based system does not have wifi, and on some other
          * devices WIFI is connected via an internal EHCI controller.
          */
-        printf("ADT: /arm-io/wlan not found\n");
+        printf("ADT: wlan node not found\n");
         return 0;
     }
-
-    uint8_t info[16];
-    if (ADT_GETPROP_ARRAY(adt, anode, "wifi-antenna-sku-info", info) < 0)
-        bail("ADT: Failed to get wifi-antenna-sku-info\n");
 
     const char *path = fdt_get_alias(dt, "wifi0");
     if (path == NULL)
@@ -1021,9 +1111,13 @@ static int dt_set_wifi(void)
     if (node < 0)
         return 0;
 
-    char antenna[8];
-    memcpy(antenna, &info[8], sizeof(antenna));
-    fdt_setprop_string(dt, node, "apple,antenna-sku", antenna);
+    /* Macs carry an antenna SKU; iPhones and iPads have none. */
+    uint8_t info[16];
+    if (ADT_GETPROP_ARRAY(adt, anode, "wifi-antenna-sku-info", info) >= 0) {
+        char antenna[8];
+        memcpy(antenna, &info[8], sizeof(antenna));
+        fdt_setprop_string(dt, node, "apple,antenna-sku", antenna);
+    }
 
     u32 len;
     const u8 *cal_blob = adt_getprop(adt, anode, "wifi-calibration-msf", &len);
@@ -3029,6 +3123,8 @@ int kboot_prepare_dt(void *fdt)
      * for the usable memory span to make it into the devicetree.
      */
     if (dt_set_memory())
+        return -1;
+    if (dt_set_nvme_hmb())
         return -1;
 
     if (fdt_pack(dt))
