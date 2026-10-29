@@ -344,6 +344,24 @@ bool main_storage_read(u64 lba, u64 *bfr)
     }
 }
 
+/* count contiguous blocks; one command per chunk where the backend can */
+bool main_storage_read_blocks(u64 lba, u32 count, void *bfr)
+{
+    u32 chunk = storage_type == STORAGE_TYPE_APCIE ? apcie_nvme_max_blocks() : 1;
+    u8 *out = bfr;
+
+    while (count) {
+        u32 n = count < chunk ? count : chunk;
+        bool ok = n > 1 ? apcie_nvme_read_blocks(lba, n, out) : main_storage_read(lba, (u64 *)out);
+        if (!ok)
+            return false;
+        lba += n;
+        out += (u64)n * SZ_4K;
+        count -= n;
+    }
+    return true;
+}
+
 void main_storage_shutdown(void)
 {
     if (!storage_type)

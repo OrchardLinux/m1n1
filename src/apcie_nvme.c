@@ -296,6 +296,7 @@ static struct queue adminq, ioq;
 static void *identify_buf;
 static bool powered, link_up, controller_on, initialized;
 static const struct apcie_soc *soc;
+static u32 max_blocks;
 
 static int t8010_setup_link(void);
 
@@ -798,14 +799,15 @@ static int setup_nvmmu(void)
 }
 
 /* Page count last: a non-zero count is what makes the TCB valid. */
-static u64 tcb_map(u32 tag, void *buf, bool to_memory)
+static u64 tcb_map(u32 tag, void *buf, u32 npages, bool to_memory)
 {
     u32 *tcb = tcbs + tag * (NVMMU_TCB_BYTES / 4);
     u32 *sgl = sgls + tag * NVMMU_MAX_PAGES;
     u64 sgl_addr = (u64)sgl;
 
-    sgl[0] = (u64)buf >> 12;
-    dc_civac_range(sgl, sizeof(u32));
+    for (u32 i = 0; i < npages; i++)
+        sgl[i] = ((u64)buf >> 12) + i;
+    dc_civac_range(sgl, npages * sizeof(u32));
     memset(tcb, 0, NVMMU_TCB_BYTES);
     tcb[0] = to_memory ? NVMMU_TCB_WRITE : NVMMU_TCB_READ;
     tcb[2] = (u64)buf >> 12;
@@ -813,7 +815,7 @@ static u64 tcb_map(u32 tag, void *buf, bool to_memory)
     tcb[5] = sgl_addr >> 32;
     dc_civac_range(tcb, NVMMU_TCB_BYTES);
     dma_wmb();
-    tcb[1] = 1;
+    tcb[1] = npages;
     dc_civac_range(tcb, NVMMU_TCB_BYTES);
     return FLATDMA_BASE + tag * FLATDMA_STRIDE;
 }
@@ -938,14 +940,14 @@ static bool submit(struct queue *q, struct nvme_sqe *cmd)
     return true;
 }
 
-static bool flatdma_read_cmd(struct queue *q, struct nvme_sqe *cmd, u32 tag, void *buf)
+static bool flatdma_read_cmd(struct queue *q, struct nvme_sqe *cmd, u32 tag, void *buf, u32 npages)
 {
-    dc_civac_range(buf, SZ_4K);
+    dc_civac_range(buf, npages * SZ_4K);
     cmd->flags = NVME_FLAG_FLATDMA;
-    cmd->prp1 = tcb_map(tag, buf, true);
+    cmd->prp1 = tcb_map(tag, buf, npages, true);
     bool ok = submit(q, cmd);
     tcb_retire(tag);
-    dc_civac_range(buf, SZ_4K);
+    dc_civac_range(buf, npages * SZ_4K);
     return ok;
 }
 
@@ -1005,9 +1007,18 @@ static int create_io_queues(void)
 
     struct nvme_sqe cmd = {0};
     cmd.opcode = NVME_ADMIN_IDENTIFY;
+    cmd.cdw10 = 1; /* controller */
+    if (!flatdma_read_cmd(&adminq, &cmd, TAG_IDENTIFY, identify_buf, 1))
+        return -1;
+    /* MDTS is a power of two in units of the 4 KiB memory page; 0 is no limit */
+    u8 mdts = ((const u8 *)identify_buf)[77];
+    max_blocks = mdts && mdts < 8 ? 1U << mdts : NVMMU_MAX_PAGES;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_ADMIN_IDENTIFY;
     cmd.nsid = 1;
     cmd.cdw10 = 0; /* namespace */
-    if (!flatdma_read_cmd(&adminq, &cmd, TAG_IDENTIFY, identify_buf))
+    if (!flatdma_read_cmd(&adminq, &cmd, TAG_IDENTIFY, identify_buf, 1))
         return -1;
     const u8 *ns = identify_buf;
     u8 lbads = ns[128 + 4 * (ns[26] & 0xf) + 2];
@@ -1147,9 +1158,15 @@ bool apcie_nvme_init(void)
     return true;
 }
 
-bool apcie_nvme_read(u64 lba, void *buffer)
+u32 apcie_nvme_max_blocks(void)
 {
-    if (!initialized || ((u64)buffer & (SZ_4K - 1)))
+    return initialized ? max_blocks : 0;
+}
+
+/* count contiguous 4 KiB blocks into a contiguous buffer, one command */
+bool apcie_nvme_read_blocks(u64 lba, u32 count, void *buffer)
+{
+    if (!initialized || ((u64)buffer & (SZ_4K - 1)) || !count || count > max_blocks)
         return false;
 
     struct nvme_sqe cmd = {0};
@@ -1157,6 +1174,11 @@ bool apcie_nvme_read(u64 lba, void *buffer)
     cmd.nsid = 1;
     cmd.cdw10 = lba;
     cmd.cdw11 = lba >> 32;
-    cmd.cdw12 = 0; /* one 4 KiB block */
-    return flatdma_read_cmd(&ioq, &cmd, TAG_READ, buffer);
+    cmd.cdw12 = count - 1;
+    return flatdma_read_cmd(&ioq, &cmd, TAG_READ, buffer, count);
+}
+
+bool apcie_nvme_read(u64 lba, void *buffer)
+{
+    return apcie_nvme_read_blocks(lba, 1, buffer);
 }
