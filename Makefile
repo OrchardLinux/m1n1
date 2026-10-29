@@ -129,6 +129,7 @@ OBJECTS := \
 	aic.o \
 	akf.o akf_fw.o \
 	ans1.o \
+	apcie_nvme.o \
 	asc.o \
 	bootlogo_48.o bootlogo_128.o bootlogo_256.o \
 	chainload.o \
