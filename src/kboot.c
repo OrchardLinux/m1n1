@@ -1002,6 +1002,32 @@ static int dt_set_als(void)
     return 0;
 }
 
+/*
+ * The AOP's firmware carries the chip's ECID in its boot arguments. Pass it
+ * only to the AOP's node; the driver removes it from the tree once read.
+ */
+static int dt_set_aop(void)
+{
+    const char *path = fdt_get_alias(dt, "aop");
+    if (path == NULL)
+        return 0;
+
+    int node = fdt_path_offset(dt, path);
+    if (node < 0)
+        bail("FDT: aop alias points at nonexistent node\n");
+
+    int chosen = adt_path_offset(adt, "/chosen");
+    u64 ecid;
+    if (chosen < 0 || ADT_GETPROP(adt, chosen, "unique-chip-id", &ecid) < 0 || !ecid) {
+        printf("ADT: no unique-chip-id for the AOP\n");
+        return 0;
+    }
+
+    if (fdt_setprop_u64(dt, node, "apple,ecid", ecid))
+        bail("FDT: failed to set apple,ecid\n");
+    return 0;
+}
+
 static int dt_set_multitouch(void)
 {
     const char *path = fdt_get_alias(dt, "touchbar0");
@@ -3120,6 +3146,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_set_multitouch())
         return -1;
     if (dt_set_als())
+        return -1;
+    if (dt_set_aop())
         return -1;
     if (dt_set_sep())
         return -1;
