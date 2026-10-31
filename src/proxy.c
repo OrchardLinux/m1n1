@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h"
+
 #include "proxy.h"
 #include "ans1.h"
 #include "cpufreq.h"
@@ -34,6 +36,10 @@
 
 void *rust_read_gigalocker(size_t *);
 void rust_free_gigalocker(void *, size_t);
+#ifdef CHAINLOADING
+void *rust_boot_entries(const char *devicetree, size_t *size);
+void rust_free_boot_entries(void *, size_t);
+#endif
 
 int proxy_process(ProxyRequest *request, ProxyReply *reply)
 {
@@ -675,6 +681,24 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             rust_free_gigalocker((void *)cmd_buf[0], cmd_buf[1]);
             break;
         }
+
+#ifdef CHAINLOADING
+        /* Main storage must be up (P_MAIN_STORAGE_INIT). args[1]: DTB file name or 0 */
+        case P_BOOT_ENTRIES: {
+            size_t size = 0;
+            void *text = rust_boot_entries((const char *)request->args[1], &size);
+            size_t *cmd_buf = (size_t *)request->args[0];
+            cmd_buf[0] = (size_t)text;
+            cmd_buf[1] = size;
+            reply->retval = text ? 0 : -1;
+            break;
+        }
+        case P_BOOT_ENTRIES_FREE: {
+            size_t *cmd_buf = (size_t *)request->args[0];
+            rust_free_boot_entries((void *)cmd_buf[0], cmd_buf[1]);
+            break;
+        }
+#endif
 
         default:
             reply->status = S_BADCMD;
