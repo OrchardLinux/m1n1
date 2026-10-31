@@ -4,6 +4,7 @@
 
 #include "kboot.h"
 #include "adt.h"
+#include "apcie_nvme.h"
 #include "akf_fw.h"
 #include "assert.h"
 #include "clk.h"
@@ -377,6 +378,8 @@ static int dt_set_nvme_hmb(void)
     if (fdt_setprop(dt, node, "reg", reg, sizeof(reg)))
         bail("FDT: failed to set NVMe HMB region\n");
     printf("FDT: NVMe HMB at 0x%lx size 0x%lx\n", region[0], region[1]);
+    /* Linux starts the controller itself; it must boot from its own flash */
+    apcie_nvme_release_boot_from_host();
     return 0;
 }
 

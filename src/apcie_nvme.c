@@ -22,6 +22,7 @@
 
 #define APCIE_PATH  "/arm-io/apcie"
 #define BRIDGE_PATH "/arm-io/apcie/pci-bridge0"
+#define S3E_PATH    BRIDGE_PATH "/s3e"
 #define DART_PATH   "/arm-io/dart-apcie0"
 #define NVMMU_PATH  "/arm-io/nvme-mmu0"
 #define GPIO_PATH   "/arm-io/gpio"
@@ -390,6 +391,35 @@ static int get_gpio(const char *prop, u32 *pin)
         return -1;
     *pin = fn[2];
     return 0;
+}
+
+/*
+ * An iBoot started for a restore (iBSS/iBEC from USB) marks the controller
+ * "ibec-boot" and drives its boot_from_host strap high: the controller then
+ * waits for firmware from the host and never asks for its HMB. Strap it back
+ * to booting from its own flash, before the port comes out of reset.
+ */
+void apcie_nvme_release_boot_from_host(void)
+{
+    int node = adt_path_offset(adt, S3E_PATH);
+    const u8 *ibec_boot;
+    const u32 *fn;
+    u64 gpio;
+    u32 len;
+
+    if (node < 0)
+        return;
+    ibec_boot = adt_getprop(adt, node, "ibec-boot", &len);
+    if (!ibec_boot || !len || !ibec_boot[0])
+        return;
+    /* phandle, 'GPIO', pin, flags */
+    fn = adt_getprop(adt, node, "function-boot_from_host", &len);
+    if (!fn || len < 16 || get_reg(GPIO_PATH, 0, &gpio, NULL) < 0) {
+        printf("apcie-nvme: ibec-boot without a boot_from_host GPIO\n");
+        return;
+    }
+    clear32(gpio + 4 * fn[2], BIT(0));
+    printf("apcie-nvme: boot_from_host released (GPIO %u)\n", fn[2]);
 }
 
 static int read_adt(void)
@@ -1138,6 +1168,7 @@ bool apcie_nvme_init(void)
             soc = &apcie_socs[i];
     if (!soc || read_adt() < 0)
         return false;
+    apcie_nvme_release_boot_from_host();
 
     /* Nothing in apcie may be read before it is powered: that faults. */
     if (pmgr_adt_power_enable(APCIE_PATH) < 0) {
