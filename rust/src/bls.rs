@@ -13,7 +13,7 @@ use crate::storage;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::ffi::{c_char, c_void, CStr};
+use core::ffi::{c_char, c_int, c_void, CStr};
 use core::fmt::Write as _;
 use fatfs::{FileSystem, FsOptions, Read, ReadWriteSeek, Seek, SeekFrom};
 use uuid::{uuid, Uuid};
@@ -235,6 +235,21 @@ where
     IO::Error: core::fmt::Debug,
     F: Fn(u64) -> IO,
 {
+    with_entries(open, devicetree, |_, entries| Ok(Listing { entries }))
+}
+
+/// Opens the boot partition, reads and checks its entries in BLS order and
+/// hands them to `then` along with the partition's root directory.
+fn with_entries<IO, F, R>(
+    open: F,
+    devicetree: Option<&str>,
+    then: impl FnOnce(&Dir<IO>, Vec<Entry>) -> Result<R, String>,
+) -> Result<R, String>
+where
+    IO: ReadWriteSeek,
+    IO::Error: core::fmt::Debug,
+    F: Fn(u64) -> IO,
+{
     let mut table = gpt::GPT::new(open(0)).map_err(|_| "No GPT on this disk".to_string())?;
     let mut boot = None;
     let mut boots = 0;
@@ -267,11 +282,7 @@ where
     let root_dir = fs.root_dir();
     let dir = match root_dir.open_dir(ENTRIES_DIR) {
         Ok(dir) => dir,
-        Err(fatfs::Error::NotFound) => {
-            return Ok(Listing {
-                entries: Vec::new(),
-            })
-        }
+        Err(fatfs::Error::NotFound) => return then(&root_dir, Vec::new()),
         Err(err) => return Err(fs_error(ENTRIES_DIR, err)),
     };
 
@@ -314,7 +325,95 @@ where
         entries.push(entry);
     }
     entries.sort_by(entry_cmp);
-    Ok(Listing { entries })
+    then(&root_dir, entries)
+}
+
+/// An entry's files in memory, as `P_BOOT_START` needs them.
+pub struct Loaded {
+    /// The kernel as stored: gzip, or an Image with room for its `image_size`
+    /// at a `KERNEL_ALIGN` boundary.
+    pub linux: (*mut u8, usize),
+    /// All initrds, concatenated in entry order.
+    pub initrd: (*mut u8, usize),
+    pub devicetree: (*mut u8, usize),
+    pub options: String,
+}
+
+pub const KERNEL_ALIGN: usize = 2 << 20;
+
+fn read_into<IO: ReadWriteSeek>(dir: &Dir<IO>, path: &str, dst: &mut [u8]) -> Result<(), String> {
+    let mut file = dir.open_file(path).map_err(|e| fs_error(path, e))?;
+    file.read_exact(dst)
+        .map_err(|_| format!("{}: read error", path))
+}
+
+/// Checks the entries again and loads the bootable entry `id`. `alloc(size,
+/// align)` gives memory that stays valid after this returns.
+pub fn load_entry<IO, F, A>(
+    open: F,
+    id: &str,
+    devicetree: Option<&str>,
+    mut alloc: A,
+) -> Result<Loaded, String>
+where
+    IO: ReadWriteSeek,
+    IO::Error: core::fmt::Debug,
+    F: Fn(u64) -> IO,
+    A: FnMut(usize, usize) -> *mut u8,
+{
+    with_entries(open, devicetree, |dir, entries| {
+        let entry = entries
+            .iter()
+            .find(|e| e.id == id)
+            .ok_or_else(|| format!("No boot entry {}", id))?;
+        if let Some(problem) = entry.problems.first() {
+            return Err(format!("{} is not bootable: {}", id, problem));
+        }
+        let mut alloc_slice = |size: usize, align: usize| -> Result<&mut [u8], String> {
+            let ptr = alloc(size.max(1), align);
+            if ptr.is_null() {
+                return Err(format!("Out of memory for {} bytes", size));
+            }
+            Ok(unsafe { core::slice::from_raw_parts_mut(ptr, size) })
+        };
+
+        let path = entry.get("linux").unwrap_or_default();
+        let (size, head) = probe(dir, path)?;
+        let size = size as usize;
+        let linux = if head[..2] == [0x1f, 0x8b] {
+            alloc_slice(size, 64)?
+        } else {
+            let image_size = u64::from_le_bytes(head[16..24].try_into().unwrap()) as usize;
+            &mut alloc_slice(size.max(image_size), KERNEL_ALIGN)?[..size]
+        };
+        read_into(dir, path, linux)?;
+        let linux = (linux.as_mut_ptr(), size);
+
+        let mut initrds = Vec::new();
+        for path in entry.all("initrd") {
+            initrds.push((path, probe(dir, path)?.0 as usize));
+        }
+        let total = initrds.iter().map(|(_, size)| size).sum();
+        let initrd = alloc_slice(total, 4096)?;
+        let mut at = 0;
+        for (path, size) in initrds {
+            read_into(dir, path, &mut initrd[at..at + size])?;
+            at += size;
+        }
+        let initrd = (initrd.as_mut_ptr(), total);
+
+        let path = entry.get("devicetree").unwrap_or_default();
+        let size = probe(dir, path)?.0 as usize;
+        let tree = alloc_slice(size, 8)?;
+        read_into(dir, path, tree)?;
+
+        Ok(Loaded {
+            linux,
+            initrd,
+            devicetree: (tree.as_mut_ptr(), size),
+            options: entry.options(),
+        })
+    })
 }
 
 type Dir<'a, IO> = fatfs::Dir<'a, IO, fatfs::NullTimeProvider, fatfs::LossyOemCpConverter>;
@@ -498,6 +597,68 @@ pub unsafe extern "C" fn rust_boot_entries(
     text.push(0);
     unsafe { *size = len };
     text.leak().as_mut_ptr() as *mut c_void
+}
+
+#[repr(C)]
+pub struct BootFiles {
+    kernel: *mut c_void,
+    kernel_size: c_size_t,
+    initrd: *mut c_void,
+    initrd_size: c_size_t,
+    devicetree: *mut c_void,
+    devicetree_size: c_size_t,
+    options: *mut c_char,
+}
+
+extern "C" {
+    fn heapblock_alloc_aligned(size: c_size_t, align: c_size_t) -> *mut c_void;
+}
+
+/// Loads the bootable entry `id` of main storage, which the caller has
+/// initialised, into heapblock memory. `devicetree` may be NULL. Returns 0, or
+/// -1 with the reason on the console.
+#[no_mangle]
+pub unsafe extern "C" fn rust_boot_entry_load(
+    id: *const c_char,
+    devicetree: *const c_char,
+    files: *mut BootFiles,
+) -> c_int {
+    let Ok(id) = unsafe { CStr::from_ptr(id) }.to_str() else {
+        println!("bls: the entry id is not UTF-8");
+        return -1;
+    };
+    let devicetree = match devicetree.is_null() {
+        true => None,
+        false => unsafe { CStr::from_ptr(devicetree) }.to_str().ok(),
+    };
+    let alloc = |size, align| unsafe { heapblock_alloc_aligned(size, align) as *mut u8 };
+    match load_entry(storage::MainStorage::new, id, devicetree, alloc) {
+        Err(error) => {
+            println!("bls: {}", error);
+            -1
+        }
+        Ok(loaded) => {
+            println!(
+                "bls: loaded {}: linux {} bytes, initrd {} bytes, devicetree {} bytes",
+                id, loaded.linux.1, loaded.initrd.1, loaded.devicetree.1
+            );
+            let mut options = loaded.options.into_bytes();
+            options.retain(|&b| b != 0);
+            options.push(0);
+            unsafe {
+                *files = BootFiles {
+                    kernel: loaded.linux.0 as *mut c_void,
+                    kernel_size: loaded.linux.1,
+                    initrd: loaded.initrd.0 as *mut c_void,
+                    initrd_size: loaded.initrd.1,
+                    devicetree: loaded.devicetree.0 as *mut c_void,
+                    devicetree_size: loaded.devicetree.1,
+                    options: options.leak().as_mut_ptr() as *mut c_char,
+                };
+            }
+            0
+        }
+    }
 }
 
 #[no_mangle]
@@ -774,6 +935,69 @@ mod tests {
         assert!(text.contains("\nproblem efi is not supported\n"));
         assert!(!text.contains("problem none") && !text.contains("\nroot x\n"));
         assert!(text.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn loads_an_entry() {
+        let mut img = image();
+        img[16..24].copy_from_slice(&4096u64.to_le_bytes()); // image_size beyond the file
+        let a = entry_text("Omarchy", "6.18.2-orchard").replace(
+            "initrd /tok/6.18.2-orchard/initrd\n",
+            "initrd /tok/6.18.2-orchard/initrd\ninitrd /tok/6.18.2-orchard/extra\n",
+        );
+        let files: Vec<(&str, &[u8])> = vec![
+            ("/loader/entries/a.conf", a.as_bytes()),
+            ("/loader/entries/bad.conf", b"title Bad\n"),
+            ("/tok/6.18.2-orchard/linux", &img),
+            ("/tok/6.18.2-orchard/initrd", b"070701"),
+            ("/tok/6.18.2-orchard/extra", b"XYZ"),
+            ("/tok/6.18.2-orchard/t8010-j71b.dtb", DTB),
+        ];
+        let d = disk(&files, false);
+        let mut allocs = Vec::new();
+        let alloc = |size: usize, align: usize| {
+            let block = vec![0u8; size + align].leak();
+            let at = block.as_ptr().align_offset(align);
+            allocs.push((size, align));
+            block[at..].as_mut_ptr()
+        };
+        let open = |lba| Mem {
+            disk: d.clone(),
+            base: lba * BLOCK,
+            pos: 0,
+        };
+        let loaded = load_entry(open, "a", Some("t8010-j71b.dtb"), alloc).unwrap();
+        let bytes =
+            |(p, n): (*mut u8, usize)| unsafe { core::slice::from_raw_parts(p, n) }.to_vec();
+        assert_eq!(bytes(loaded.linux), img);
+        assert_eq!(loaded.linux.0 as usize % KERNEL_ALIGN, 0);
+        assert_eq!(bytes(loaded.initrd), b"070701XYZ");
+        assert_eq!(bytes(loaded.devicetree), DTB);
+        assert_eq!(loaded.options, format!("root=PARTUUID={} rw quiet", ROOT));
+        assert_eq!(allocs[0], (4096, KERNEL_ALIGN));
+
+        let open = |lba| Mem {
+            disk: d.clone(),
+            base: lba * BLOCK,
+            pos: 0,
+        };
+        let err = load_entry(open, "bad", None, |_, _| core::ptr::null_mut())
+            .err()
+            .unwrap();
+        assert!(
+            err.starts_with("bad is not bootable: needs exactly one linux"),
+            "{}",
+            err
+        );
+        let open = |lba| Mem {
+            disk: d.clone(),
+            base: lba * BLOCK,
+            pos: 0,
+        };
+        let err = load_entry(open, "nope", None, |_, _| core::ptr::null_mut())
+            .err()
+            .unwrap();
+        assert_eq!(err, "No boot entry nope");
     }
 
     #[test]

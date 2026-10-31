@@ -4,6 +4,7 @@
 
 #include "proxy.h"
 #include "ans1.h"
+#include "bootmgr.h"
 #include "cpufreq.h"
 #include "dapf.h"
 #include "dart.h"
@@ -699,6 +700,14 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         }
 #endif
+        /* args: entry id, DTB file name or 0, flags (0). On success the reply goes out, then
+         * the kernel runs. */
+        case P_BOOT_START:
+            if (bootmgr_start((const char *)request->args[0], (const char *)request->args[1],
+                              request->args[2]) == 0)
+                return 1;
+            reply->retval = -1;
+            break;
 
         default:
             reply->status = S_BADCMD;

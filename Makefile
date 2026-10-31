@@ -132,6 +132,7 @@ OBJECTS := \
 	apcie_nvme.o \
 	asc.o \
 	bootlogo_48.o bootlogo_128.o bootlogo_256.o \
+	bootmgr.o \
 	chainload.o \
 	chainload_asm.o \
 	chickens.o \
