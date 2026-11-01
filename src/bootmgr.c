@@ -4,6 +4,7 @@
 
 #include "bootmgr.h"
 #include "cpufreq.h"
+#include "fb.h"
 #include "heapblock.h"
 #include "kboot.h"
 #include "mitigations.h"
@@ -29,7 +30,20 @@ struct boot_files {
     char *options;
 };
 
-int rust_boot_entry_load(const char *id, const char *devicetree, struct boot_files *files);
+int rust_boot_entry_load(const char *id, const char *devicetree, bool splash,
+                         struct boot_files *files);
+
+/* Called from Rust: the entry's splash, pixels as b, g, r, 0, centred on black. */
+void bootmgr_paint_splash(const void *pixels, u32 width, u32 height)
+{
+    if (!fb.ptr || width > fb.width || height > fb.height) {
+        printf("bootmgr: splash %ux%u does not fit the screen\n", width, height);
+        return;
+    }
+    fb_fill(0, 0, fb.width, fb.height, int2rgb(0));
+    fb_blit((fb.width - width) / 2, (fb.height - height) / 2, width, height, (void *)pixels, width,
+            PIX_FMT_XBGR);
+}
 
 static bool copy_name(char *dst, const char *src)
 {
@@ -85,7 +99,7 @@ int bootmgr_start(const char *id_arg, const char *devicetree_arg, u64 flags)
         printf("bootmgr: argument too long\n");
         return -1;
     }
-    if (flags) {
+    if (flags & ~BOOTMGR_NO_SPLASH) {
         printf("bootmgr: unsupported flags 0x%lx\n", flags);
         return -1;
     }
@@ -94,7 +108,8 @@ int bootmgr_start(const char *id_arg, const char *devicetree_arg, u64 flags)
     heapblock_set_limit(NULL);
 
     struct boot_files files;
-    if (rust_boot_entry_load(id, devicetree_arg ? devicetree : NULL, &files) < 0)
+    if (rust_boot_entry_load(id, devicetree_arg ? devicetree : NULL, !(flags & BOOTMGR_NO_SPLASH),
+                             &files) < 0)
         return -1;
     void *kernel = unpack_kernel(files.kernel, files.kernel_size);
     if (!kernel)
