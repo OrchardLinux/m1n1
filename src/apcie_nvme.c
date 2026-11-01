@@ -970,15 +970,41 @@ static bool submit(struct queue *q, struct nvme_sqe *cmd)
     return true;
 }
 
+/*
+ * The completion reaches memory through the DART, the data through the NVMMU,
+ * and nothing orders the two: on T8010 the last bytes of a read land up to
+ * ~10 us after its completion. Mark the end of the buffer and wait until the
+ * data has overwritten the mark.
+ */
+#define DATA_MARK         0x4f52434841524421UL
+#define DATA_WAIT_TIMEOUT 100000
+
 static bool flatdma_read_cmd(struct queue *q, struct nvme_sqe *cmd, u32 tag, void *buf, u32 npages)
 {
+    volatile u64 *mark = (u64 *)((u8 *)buf + npages * SZ_4K) - 2;
+
+    mark[0] = DATA_MARK;
+    mark[1] = ~DATA_MARK;
     dc_civac_range(buf, npages * SZ_4K);
     cmd->flags = NVME_FLAG_FLATDMA;
     cmd->prp1 = tcb_map(tag, buf, npages, true);
     bool ok = submit(q, cmd);
     tcb_retire(tag);
     dc_civac_range(buf, npages * SZ_4K);
-    return ok;
+    if (!ok)
+        return false;
+
+    u64 timeout = timeout_calculate(DATA_WAIT_TIMEOUT);
+    while (mark[0] == DATA_MARK && mark[1] == ~DATA_MARK) {
+        if (timeout_expired(timeout)) {
+            printf("apcie-nvme: read of lba 0x%x: no data %u us after completion\n", cmd->cdw10,
+                   DATA_WAIT_TIMEOUT);
+            return false;
+        }
+        dc_civac_range((void *)mark, 16);
+    }
+    dc_civac_range(buf, npages * SZ_4K);
+    return true;
 }
 
 static int enable_controller(void)
