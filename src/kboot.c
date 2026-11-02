@@ -1019,6 +1019,73 @@ static int dt_set_als(void)
 }
 
 /*
+ * The A9's AOP firmware also takes the AOP target number and the chip's ID and
+ * revision in its boot arguments, and each motion sensor's factory
+ * calibration, which iBoot resolves from syscfg into the sensor's node below
+ * iop-aop-nub. Copy them into the AOP's node and its sensor child nodes of the
+ * same name; the calibration keeps its name with an "apple," prefix.
+ */
+static const char *const aop_sensor_calibrations[] = {
+    "low-temp-accel-offset",
+    "accel-sensitivity-calibration",
+    "accel-range-sensitivity-cal",
+    "accel-interrupt-calibration",
+    "gyro-sensitivity-calibration",
+    "gyro-range-sensitivity-cal",
+    "gyro-interrupt-calibration",
+    "gyro-trim-calibration",
+    "pressure-offset-calibration",
+    "pressure-accel-sensitivity",
+    "pressure-heater-resistance",
+};
+
+static int dt_set_aop_sensors(int node)
+{
+    int nub = adt_path_offset(adt, "/arm-io/aop/iop-aop-nub");
+    if (nub < 0)
+        return 0;
+
+    u32 val;
+    if (ADT_GETPROP(adt, nub, "aop-target", &val) >= 0 &&
+        fdt_setprop_u32(dt, node, "apple,aop-target", val))
+        bail("FDT: failed to set apple,aop-target\n");
+
+    int chosen = adt_path_offset(adt, "/chosen");
+    if (chosen >= 0 && ADT_GETPROP(adt, chosen, "chip-id", &val) >= 0 &&
+        fdt_setprop_u32(dt, node, "apple,chip-id", val))
+        bail("FDT: failed to set apple,chip-id\n");
+
+    int arm_io = adt_path_offset(adt, "/arm-io");
+    if (arm_io >= 0 && ADT_GETPROP(adt, arm_io, "chip-revision", &val) >= 0 &&
+        fdt_setprop_u32(dt, node, "apple,chip-revision", val))
+        bail("FDT: failed to set apple,chip-revision\n");
+
+    int sensor = nub;
+    ADT_FOREACH_CHILD(adt, sensor)
+    {
+        const char *name = adt_get_name(adt, sensor);
+
+        for (size_t i = 0; i < ARRAY_SIZE(aop_sensor_calibrations); i++) {
+            u32 len;
+            const u8 *blob = adt_getprop(adt, sensor, aop_sensor_calibrations[i], &len);
+            if (!blob || !len || (len >= 7 && !memcmp(blob, "syscfg/", 7)))
+                continue;
+
+            /* Earlier properties may have moved the sensor's node. */
+            int child = fdt_subnode_offset(dt, node, name);
+            if (child < 0)
+                break;
+
+            char prop[64];
+            snprintf(prop, sizeof(prop), "apple,%s", aop_sensor_calibrations[i]);
+            if (fdt_setprop(dt, child, prop, blob, len))
+                bail("FDT: failed to set %s/%s\n", name, prop);
+        }
+    }
+    return 0;
+}
+
+/*
  * The AOP's firmware carries the chip's ECID in its boot arguments. Pass it
  * only to the AOP's node; the driver removes it from the tree once read.
  */
@@ -1041,7 +1108,7 @@ static int dt_set_aop(void)
 
     if (fdt_setprop_u64(dt, node, "apple,ecid", ecid))
         bail("FDT: failed to set apple,ecid\n");
-    return 0;
+    return dt_set_aop_sensors(node);
 }
 
 static int dt_set_multitouch(void)
