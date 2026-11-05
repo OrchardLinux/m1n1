@@ -1003,7 +1003,6 @@ static void usb_dwc2_cdc_start_bulk_out_xfer(dwc2_dev_t *dev, u8 endpoint_number
     if (ringbuffer_get_free(host2device) < XFER_SIZE)
         return;
 
-    memset(dev->endpoints[endpoint_number].xfer_buffer, 0xaa, XFER_SIZE);
     usb_dwc2_ep_hw_recv(dev, endpoint_number, 512, 1);
     dev->endpoints[endpoint_number].xfer_in_progress = true;
 }
