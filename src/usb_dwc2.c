@@ -285,7 +285,9 @@ static const struct cdc_dev_desc cdc_configuration_descriptor = {
         },
 
     /*
-     * CDC ACM interface for virtual uart
+     * Second pipe: a vendor interface, so that no host serial driver sits
+     * between the proxy and the bulk endpoints. The class-specific descriptors
+     * stay, and hosts ignore them here; SET_CONTROL_LINE_STATE still opens it.
      */
 
     .sec_interface_management =
@@ -295,8 +297,8 @@ static const struct cdc_dev_desc cdc_configuration_descriptor = {
             .bInterfaceNumber = 2,
             .bAlternateSetting = 0,
             .bNumEndpoints = 1,
-            .bInterfaceClass = CDC_INTERFACE_CLASS,
-            .bInterfaceSubClass = CDC_INTERFACE_SUBCLASS_ACM,
+            .bInterfaceClass = 0xff,
+            .bInterfaceSubClass = 0,
             .bInterfaceProtocol = CDC_INTERFACE_PROTOCOL_NONE,
             .iInterface = 0,
 
@@ -331,7 +333,7 @@ static const struct cdc_dev_desc cdc_configuration_descriptor = {
             .bInterfaceNumber = 3,
             .bAlternateSetting = 0,
             .bNumEndpoints = 2,
-            .bInterfaceClass = CDC_INTERFACE_CLASS_DATA,
+            .bInterfaceClass = 0xff,
             .bInterfaceSubClass = 0, // unused
             .bInterfaceProtocol = 0, // unused
             .iInterface = 0,

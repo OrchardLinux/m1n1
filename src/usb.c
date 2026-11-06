@@ -391,6 +391,11 @@ int usb_complex_init(struct usb_complex_config *config)
     iodev_register_device(IODEV_USB0, usb_iodev);
     printf("USB0: initialized at %p\n", opaque);
 
+    /* The proxy also listens on the second pipe, the host's raw way in. */
+    usb_type = USB_TYPE_DWC2;
+    usb_iodev_vuart_setup(IODEV_USB0);
+    iodev_usb_vuart.usage = USAGE_UARTPROXY;
+
     usb_is_initialized = true;
     set32(config->USB2Phy_Base + USBX_OTG_SIG, USBX_OTG_SIG_VBUSDET_FORCE_EN);
 
