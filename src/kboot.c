@@ -947,6 +947,8 @@ static int dt_set_touchscreen(void)
         {"luna-shape-flex-noise", "apple,luna-shape-flex-noise"},
         {"luna-racer-tmon-comp", "apple,luna-racer-tmon-comp"},
         {"luna-afe-calibration", "apple,luna-afe-calibration"},
+        /* Which firmware variant this unit needs; the driver loads that one. */
+        {"hid-merge-personality", "apple,hid-merge-personality"},
     };
     const char *path = fdt_get_alias(dt, "touchscreen0");
     if (path == NULL)
