@@ -464,7 +464,14 @@ void fb_init(bool clear)
                         &orig_logo);
     }
 
-    if (payload_logo(&custom_128, &custom_256)) {
+    u32 *splash, splash_w, splash_h;
+    if (payload_splash(&splash, &splash_w, &splash_h) && splash_w <= fb.width &&
+        splash_h <= fb.height) {
+        custom_logo.ptr = splash;
+        custom_logo.width = splash_w;
+        custom_logo.height = splash_h;
+        logo = &custom_logo;
+    } else if (payload_logo(&custom_128, &custom_256)) {
         custom_logo = *logo;
         if (custom_logo.width == 256) {
             custom_logo.ptr = custom_256;
