@@ -302,7 +302,24 @@ void cpu_sleep(bool deep)
     }
 }
 
+/*
+ * Main storage stays up between init and shutdown; a second init in that
+ * time is a no-op. m1n1 may have brought it up itself (autoboot) before a
+ * host asks again, and on A10 a second init hangs the next read.
+ */
+static bool storage_up;
+
+static bool main_storage_start(void);
+
 bool main_storage_init(void)
+{
+    if (storage_up)
+        return true;
+    storage_up = main_storage_start();
+    return storage_up;
+}
+
+static bool main_storage_start(void)
 {
     int ans_node = adt_path_offset(adt, "/arm-io/ans");
 
@@ -366,6 +383,7 @@ void main_storage_shutdown(void)
 {
     if (!storage_type)
         return;
+    storage_up = false;
 
     switch (storage_type) {
         case STORAGE_TYPE_ANS1:
