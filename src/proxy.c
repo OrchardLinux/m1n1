@@ -700,9 +700,14 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         }
 #endif
-        /* args: entry id, DTB file name or 0, flags (0). On success the reply goes out, then
-         * the kernel runs. */
+        /* args: entry id, DTB file name or 0, flags. On success the reply goes out, then the
+         * kernel runs. */
         case P_BOOT_START:
+            if (!request->args[0]) {
+                printf("bootmgr: no entry id\n");
+                reply->retval = -1;
+                break;
+            }
             if (bootmgr_start((const char *)request->args[0], (const char *)request->args[1],
                               request->args[2]) == 0)
                 return 1;

@@ -2,6 +2,7 @@
 
 #include "../build/build_cfg.h"
 
+#include "adt.h"
 #include "bootmgr.h"
 #include "cpufreq.h"
 #include "fb.h"
@@ -29,6 +30,24 @@ struct boot_files {
     size_t devicetree_size;
     char *options;
 };
+
+/*
+ * Called from Rust: the board m1n1 runs on, its ADT target-type in lower case
+ * (j71b), or NULL. Entries checked without a DTB file name need a *-BOARD.dtb.
+ */
+const char *bootmgr_board(void)
+{
+    static char board[32];
+    const char *target = adt_getprop(adt, 0, "target-type", NULL);
+
+    if (!target)
+        return NULL;
+    size_t i;
+    for (i = 0; target[i] && i < sizeof(board) - 1; i++)
+        board[i] = tolower(target[i]);
+    board[i] = 0;
+    return board;
+}
 
 int rust_boot_entry_load(const char *id, const char *devicetree, bool splash,
                          struct boot_files *files);
@@ -85,7 +104,9 @@ static void *unpack_kernel(void *image, size_t size)
 }
 
 /*
- * Loads and boots the BLS entry `id` from main storage, which must be up.
+ * Loads and boots the BLS entry `id` from main storage, which must be up, or
+ * the default entry (loader.conf's `default`, else the first bootable one) if
+ * `id` is NULL.
  * Storage is shut down only once everything is loaded, so a failure before
  * that leaves it usable for another entry. Returns 0 when the kernel is set
  * up to run after the proxy reply, -1 with the reason on the console.
@@ -95,7 +116,8 @@ int bootmgr_start(const char *id_arg, const char *devicetree_arg, u64 flags)
     char id[MAX_NAME], devicetree[MAX_NAME];
 
     /* The arguments live in host memory above m1n1's heap; copy them first. */
-    if (!copy_name(id, id_arg) || (devicetree_arg && !copy_name(devicetree, devicetree_arg))) {
+    if ((id_arg && !copy_name(id, id_arg)) ||
+        (devicetree_arg && !copy_name(devicetree, devicetree_arg))) {
         printf("bootmgr: argument too long\n");
         return -1;
     }
@@ -108,8 +130,8 @@ int bootmgr_start(const char *id_arg, const char *devicetree_arg, u64 flags)
     heapblock_set_limit(NULL);
 
     struct boot_files files;
-    if (rust_boot_entry_load(id, devicetree_arg ? devicetree : NULL, !(flags & BOOTMGR_NO_SPLASH),
-                             &files) < 0)
+    if (rust_boot_entry_load(id_arg ? id : NULL, devicetree_arg ? devicetree : NULL,
+                             !(flags & BOOTMGR_NO_SPLASH), &files) < 0)
         return -1;
     void *kernel = unpack_kernel(files.kernel, files.kernel_size);
     if (!kernel)
@@ -132,7 +154,7 @@ int bootmgr_start(const char *id_arg, const char *devicetree_arg, u64 flags)
         printf("bootmgr: could not prepare the device tree; storage is shut down\n");
         return -1;
     }
-    printf("bootmgr: starting %s\n", id);
+    printf("bootmgr: starting %s\n", id_arg ? id : "the default entry");
     return kboot_boot(kernel);
 }
 
