@@ -158,6 +158,25 @@ int bootmgr_start(const char *id_arg, const char *devicetree_arg, u64 flags)
     return kboot_boot(kernel);
 }
 
+/*
+ * Boots the default entry with no host, as a boot loader does at power-on.
+ * On failure the reason is on the console, and the caller falls back to the
+ * proxy with storage still up if it got that far, so a host can list the
+ * entries and start another one.
+ */
+int bootmgr_autoboot(void)
+{
+    printf("bootmgr: autoboot: starting the default entry\n");
+    if (!main_storage_init()) {
+        printf("bootmgr: autoboot: main storage did not come up\n");
+        return -1;
+    }
+    if (bootmgr_start(NULL, NULL, 0) == 0)
+        return 0;
+    printf("bootmgr: autoboot failed; waiting for a host (orchard launch --list)\n");
+    return -1;
+}
+
 #else
 
 int bootmgr_start(const char *id, const char *devicetree, u64 flags)
@@ -165,6 +184,12 @@ int bootmgr_start(const char *id, const char *devicetree, u64 flags)
     UNUSED(id);
     UNUSED(devicetree);
     UNUSED(flags);
+    printf("bootmgr: not supported in this build\n");
+    return -1;
+}
+
+int bootmgr_autoboot(void)
+{
     printf("bootmgr: not supported in this build\n");
     return -1;
 }

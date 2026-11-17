@@ -8,5 +8,6 @@
 #define BOOTMGR_NO_SPLASH BIT(0)
 
 int bootmgr_start(const char *id, const char *devicetree, u64 flags);
+int bootmgr_autoboot(void);
 
 #endif

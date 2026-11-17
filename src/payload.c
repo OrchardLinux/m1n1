@@ -6,6 +6,7 @@
 #include "payload.h"
 #include "adt.h"
 #include "assert.h"
+#include "bootmgr.h"
 #include "chainload.h"
 #include "cpufreq.h"
 #include "display.h"
@@ -184,6 +185,7 @@ static char *chosen[MAX_CHOSEN_VARS];
 #endif
 
 static bool enable_tso = false;
+static bool autoboot = false;
 
 static bool check_var(u8 **p)
 {
@@ -213,6 +215,8 @@ static bool check_var(u8 **p)
         mitigations_configure(val);
     } else if (IS_VAR("tso=")) {
         enable_tso = val[0] == '1';
+    } else if (IS_VAR("autoboot=")) {
+        autoboot = val[0] == '1';
     } else {
         printf("Unknown variable %s\n", *p);
     }
@@ -361,6 +365,10 @@ int payload_run(void)
     if (chainload_spec) {
         return chainload_load(chainload_spec, chosen, chosen_cnt);
     }
+
+    /* No kernel given: boot the default Boot Loader Specification entry from main storage. */
+    if (autoboot && !kernel && !fdt)
+        return bootmgr_autoboot();
 
     if (kernel && fdt) {
         cpufreq_init();
