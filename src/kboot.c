@@ -4,6 +4,7 @@
 
 #include "kboot.h"
 #include "adt.h"
+#include "akf_fw.h"
 #include "assert.h"
 #include "clk.h"
 #include "dapf.h"
@@ -21,6 +22,7 @@
 #include "pmgr.h"
 #include "sep.h"
 #include "sio.h"
+#include "smc.h"
 #include "smp.h"
 #include "tunables.h"
 #include "types.h"
@@ -109,6 +111,9 @@ static int dt_set_rng_seed_sep(int node)
 {
     u64 kaslr_seed;
     uint8_t rng_seed[128]; // same size used by Linux for kexec
+
+    if (!(sep_get_capabilities() & SEP_CAPABILITY_GETRAND))
+        return -1;
 
     if (sep_get_random(&kaslr_seed, sizeof(kaslr_seed)) != sizeof(kaslr_seed))
         bail("SEP: couldn't get enough random bytes for KASLR seed\n");
@@ -1295,6 +1300,51 @@ static int dt_set_acio_tunables(void)
     return 0;
 }
 
+static int dt_copy_ausb_tunable(int adt_node, int fdt_node, char *name)
+{
+    u32 cfg;
+    char fdt_name[32];
+
+    snprintf(fdt_name, 32, "apple,%s", name);
+
+    if (adt_getprop_copy(adt, adt_node, name, &cfg, sizeof(u32)) < 0)
+        bail("ADT: Could not get cfg0-device property\n");
+
+    if (fdt_setprop_u32(dt, fdt_node, fdt_name, cfg))
+        bail("FDT: Could not set property %s\n", fdt_name);
+
+    return 0;
+}
+
+static int dt_set_ausb_tunables(void)
+{
+    const char *fdt_path = fdt_get_alias(dt, "ausbphy0");
+    if (!fdt_path)
+        return 0;
+
+    int fdt_node = fdt_path_offset(dt, fdt_path);
+    if (fdt_node < 0)
+        bail("FDT: Unable to find node for path %s from alias ausbphy0", fdt_path);
+
+    int adt_node = adt_path_offset(adt, "/arm-io/otgphyctrl");
+    if (adt_node < 0)
+        bail("ADT: Could not get /arm-io/otgphyctrl path\n");
+
+    if (dt_copy_ausb_tunable(adt_node, fdt_node, "cfg0-device"))
+        return -1;
+
+    if (dt_copy_ausb_tunable(adt_node, fdt_node, "cfg1-device"))
+        return -1;
+
+    if (dt_copy_ausb_tunable(adt_node, fdt_node, "cfg0-host"))
+        return -1;
+
+    if (dt_copy_ausb_tunable(adt_node, fdt_node, "cfg1-host"))
+        return -1;
+
+    return 0;
+}
+
 static const struct adt_tunable_info pciec_tunables[] = {
     {"atc-apcie-debug-tunables", "apple,tunable-debug", 0, 0x2000, true},
     {"atc-apcie-fabric-tunables", "apple,tunable-fabric", 0, 0x4000, true},
@@ -2150,6 +2200,41 @@ static int dt_set_sep(void)
     return 0;
 }
 
+static int dt_set_smc(void)
+{
+    const char *region;
+    int reboot_node;
+    char smc_reboot[32];
+    int ret;
+
+    const char *path = fdt_get_alias(dt, "smc");
+    if (path == NULL)
+        return 0;
+
+    snprintf(smc_reboot, 32, "%s/reboot", path);
+
+    if ((reboot_node = fdt_path_offset(dt, smc_reboot)) < 0)
+        return 0;
+
+    if (fdt_node_check_compatible(dt, reboot_node, "apple,t8015-smc-reboot"))
+        return 0;
+
+    if (!(region = adt_getprop(adt, 0, "region-info", NULL))) {
+        printf("ADT: could not get region-info\n");
+        return 0;
+    }
+
+    if (strcmp(region, "CH/A")) // PRC
+        return 0;
+
+    ret = fdt_setprop_empty(dt, reboot_node, "prc-poweroff");
+
+    if (ret)
+        bail("FDT: could not set %s.prc-poweroff\n", smc_reboot);
+
+    return 0;
+}
+
 static int dt_set_sio_fwdata(const char *adt_path, const char *fdt_alias)
 {
     int node = fdt_path_offset(dt, fdt_alias);
@@ -2311,6 +2396,51 @@ static int dt_set_isp_fwdata(void)
         return ret;
 
     ret = dt_device_set_reserved_mem(mem_node, "isp-heap", dev_phandle, iova, size);
+    if (ret < 0)
+        return ret;
+
+    return 0;
+}
+
+static int dt_set_asp_fwdata(void)
+{
+    /* to avoid generating noise on A9+, check ADT first */
+    int adt_node = adt_path_offset(adt, "/arm-io/ans");
+    if (adt_node < 0)
+        return 0;
+
+    const char *fdt_path = "asp";
+    int ret = 0;
+
+    u64 phys, iova, size;
+
+    int fdt_node = fdt_path_offset(dt, fdt_path);
+    if (fdt_node < 0) {
+        printf("FDT: '%s' not found\n", fdt_path);
+        return 0;
+    }
+
+    uint32_t dev_phandle = fdt_get_phandle(dt, fdt_node);
+    if (!dev_phandle) {
+        ret = fdt_generate_phandle(dt, &dev_phandle);
+        if (!ret)
+            ret = fdt_setprop_u32(dt, fdt_node, "phandle", dev_phandle);
+        if (ret != 0)
+            bail("FDT: couldn't set '%s.phandle' property: %d\n", fdt_path, ret);
+    }
+
+    int fw_node = adt_first_child_offset(adt, adt_node);
+    if (!fw_node)
+        bail("ADT: IOP Firmware node not found\n");
+
+    if (!akf_fw_get_region(fw_node, &phys, &iova, &size))
+        return -1;
+
+    int mem_node = dt_get_or_add_reserved_mem("ans-firmware", "apple,iop-mem", true, phys, size);
+    if (mem_node < 0)
+        return ret;
+
+    ret = dt_device_set_reserved_mem(mem_node, "firmware", dev_phandle, iova, size);
     if (ret < 0)
         return ret;
 
@@ -2840,6 +2970,8 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (kboot_setup_atc(dt))
         return -1;
+    if (dt_set_ausb_tunables())
+        return -1;
     if (dt_set_acio_tunables())
         return -1;
     if (dt_set_pcie_tunables())
@@ -2853,6 +2985,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_set_sep())
         return -1;
     if (dt_set_pmp())
+        return -1;
+    if (dt_set_smc())
         return -1;
     if (dt_set_nvram())
         return -1;
@@ -2869,6 +3003,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_reserve_asc_firmware("/arm-io/isp", "/arm-io/isp0", "isp", false, isp_iova_base()))
         return -1;
     if (dt_set_isp_fwdata())
+        return -1;
+    if (dt_set_asp_fwdata())
         return -1;
     if (dt_set_pmgr())
         return -1;
@@ -2916,6 +3052,13 @@ int kboot_boot(void *kernel)
     usb_init();
     pcie_init();
     dapf_init_all();
+
+    if (chip_id == T8015 || chip_id == T8012) {
+        smc_power_on();
+        asc_dev_t *smc = asc_init("/arm-io/smc");
+        asc_cpu_start(smc);
+        asc_free(smc);
+    }
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);

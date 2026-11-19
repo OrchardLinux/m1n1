@@ -9,6 +9,12 @@
 #include "sart.h"
 #include "types.h"
 
+#define rtkit_init_asc(name, asc, dart, dart_iovad, sart, sram, epmap_cb, handler)                 \
+    rtkit_init(name, rtkit_asc_iop_ops, asc, dart, dart_iovad, sart, sram, epmap_cb, handler)
+
+#define rtkit_init_akf(name, akf, dart, dart_iovad, sart, sram, epmap_cb, handler)                 \
+    rtkit_init(name, rtkit_akf_iop_ops, akf, dart, dart_iovad, sart, sram, epmap_cb, handler)
+
 typedef struct rtkit_dev rtkit_dev_t;
 
 struct rtkit_message {
@@ -22,8 +28,13 @@ struct rtkit_buffer {
     size_t sz;
 };
 
-rtkit_dev_t *rtkit_init(const char *name, asc_dev_t *asc, dart_dev_t *dart,
-                        iova_domain_t *dart_iovad, sart_dev_t *sart, bool sram);
+extern const struct rtkit_iop_ops *const rtkit_asc_iop_ops;
+extern const struct rtkit_iop_ops *const rtkit_akf_iop_ops;
+
+rtkit_dev_t *rtkit_init(const char *name, const struct rtkit_iop_ops *iop_ops, void *mbox,
+                        dart_dev_t *dart, iova_domain_t *dart_iovad, sart_dev_t *sart, bool sram,
+                        bool (*epmap_cb)(rtkit_dev_t *rtk, u32 base, u32 bitmap),
+                        bool (*init_app_handler)(rtkit_dev_t *rtk, struct rtkit_message *msg));
 bool rtkit_quiesce(rtkit_dev_t *rtk);
 bool rtkit_sleep(rtkit_dev_t *rtk);
 void rtkit_free(rtkit_dev_t *rtk);
@@ -41,5 +52,7 @@ bool rtkit_unmap(rtkit_dev_t *rtk, u64 dva, size_t sz);
 
 bool rtkit_alloc_buffer(rtkit_dev_t *rtk, struct rtkit_buffer *bfr, size_t sz);
 bool rtkit_free_buffer(rtkit_dev_t *rtk, struct rtkit_buffer *bfr);
+
+u8 rtkit_protocol_version(rtkit_dev_t *rtk);
 
 #endif

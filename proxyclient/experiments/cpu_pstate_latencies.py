@@ -7,15 +7,28 @@ from m1n1.setup import *
 from m1n1 import asm
 
 p.smp_start_secondaries()
+p.cpufreq_init()
+p.cpufreq_unrestrict_boost()
 
 tfreq = u.mrs(CNTFRQ_EL0)
 
 TEST_CPUS = []
 CLUSTER_TYPES = []
+
+def get_cpuid(cpu):
+    if hasattr(cpu, "cpu_id"):
+        return cpu.cpu_id
+    else:
+        return cpu.reg
+
 for cpu in u.adt["/cpus"]:
-    if cpu.cpu_id == 0 or cpu.state == 'running':
+    if get_cpuid(cpu) == 0 or cpu.state == 'running':
         continue
-    if cpu.cluster_type not in CLUSTER_TYPES:
+    if not hasattr(cpu, "cluster_type"):
+        TEST_CPUS.append(get_cpuid(cpu))
+        CLUSTER_TYPES.append("")
+        break
+    elif cpu.cluster_type not in CLUSTER_TYPES:
         TEST_CPUS.append(cpu.cpu_id)
         CLUSTER_TYPES.append(cpu.cluster_type)
 
@@ -26,13 +39,97 @@ CLUSTER_STATUS = 0x20050
 
 chip_id = u.adt["/chosen"].chip_id
 
-if chip_id in (0x8103, 0x6000, 0x6001, 0x6002):
+if chip_id == 0x8960:
+    CREG = [
+        0x202200000
+    ]
+
+    MAX_PSTATE = [6]
+
+    def ps_to_cmd(reg, pstate):
+        return 1 << 25 | (pstate & 7) << 22 | (reg & ~0x1c00000)
+
+elif chip_id == 0x7000:
+    CREG = [
+        0x202200000
+    ]
+
+    if u.adt.target_type == "N102":
+        MAX_PSTATE = [5]
+    elif u.adt.target_type in ("J96", "J97"):
+        MAX_PSTATE = [7]
+    else:
+        MAX_PSTATE = [6]
+
+    def ps_to_cmd(reg, pstate):
+        return 1 << 25 | (pstate & 7) << 22 | (reg & ~0x1c00000)
+
+elif chip_id == 0x7001:
+    CREG = [
+        0x202200000
+    ]
+
+    MAX_PSTATE = [7]
+
+    def ps_to_cmd(reg, pstate):
+        return 1 << 25 | (pstate & 7) << 22 | (reg & ~0x1c00000)
+
+elif chip_id in (0x8000, 0x8001, 0x8003):
+    CREG = [
+        0x202200000
+    ]
+
+    MAX_PSTATE = [8]
+
+    def ps_to_cmd(reg, pstate):
+        return 1 << 25 | (pstate & 15) << 12 | (pstate & 15) | (reg & ~0xf00f)
+
+elif chip_id in (0x8010, 0x8012):
+    CREG = [
+        0x202f00000
+    ]
+
+    if u.adt.target_type == "N112":
+        MAX_PSTATE = [8]
+    else:
+        MAX_PSTATE = [11]
+
+    def ps_to_cmd(reg, pstate):
+        return 1 << 25 | (pstate & 15) << 12 | (pstate & 15) | (reg & ~0xf00f)
+
+elif chip_id == 0x8011:
+    CREG = [
+        0x202f00000
+    ]
+
+    MAX_PSTATE = [10]
+    LOG_ITERS = 50000
+
+    def ps_to_cmd(reg, pstate):
+        return 1 << 25 | (pstate & 15) << 12 | (pstate & 15) | (reg & ~0xf00f)
+
+elif chip_id == 0x8015:
+    CREG = [
+        0x208e00000,
+        0x208e80000
+    ]
+
+    MAX_PSTATE = [7, 8]
+
+    def ps_to_cmd(reg, pstate):
+        return 1 << 25 | (pstate & 15) << 12 | (pstate & 15) | (reg & ~0xf00f)
+
+
+elif chip_id in (0x8103, 0x6000, 0x6001, 0x6002):
     CREG = [
         0x210e00000,
         0x211e00000,
     ]
 
     MAX_PSTATE = [5, 15]
+
+    def ps_to_cmd(reg, pstate):
+        return 1 << 25 | (pstate & 15) << 12 | (pstate & 15) | (reg & ~0xf00f)
 
 elif chip_id in (0x8112, 0x6020, 0x6021, 0x6022):
     CREG = [
@@ -44,6 +141,9 @@ elif chip_id in (0x8112, 0x6020, 0x6021, 0x6022):
         MAX_PSTATE = [7, 19]
     else:
         MAX_PSTATE = [7, 17]
+
+    def ps_to_cmd(reg, pstate):
+        return 1 << 25 | (pstate & 31) | (reg & ~0x1f)
 
 code = u.malloc(0x1000)
 
@@ -110,11 +210,15 @@ def bench_cpu(idx, loops=10000000):
     return mhz
 
 def set_pstate(cluster, pstate):
-    p.mask64(CREG[cluster] + CLUSTER_PSTATE, 0x1f01f, (1<<25) | pstate)
+    p.write64(CREG[cluster] + CLUSTER_PSTATE, ps_to_cmd(p.read64(CREG[cluster] + CLUSTER_PSTATE), pstate))
 
 print()
 
-LOG_ITERS = 10000
+if chip_id in (0x8010, 0x8011, 0x8012):
+    LOG_ITERS = 50000
+else:
+    LOG_ITERS = 10000
+
 logbuf = u.malloc(LOG_ITERS * 16)
 
 def bench_latency(cluster, cpu, from_pstate, to_pstate, verbose=False):
@@ -122,7 +226,7 @@ def bench_latency(cluster, cpu, from_pstate, to_pstate, verbose=False):
     bench_cpu(cpu)
 
     p.smp_call(cpu, util.timelog, logbuf, LOG_ITERS)
-    psreg = (p.read64(CREG[cluster] + CLUSTER_PSTATE) & ~0x1f01f) | (1<<25) | to_pstate
+    psreg = ps_to_cmd(p.read64(CREG[cluster] + CLUSTER_PSTATE), to_pstate)
     tval = p.call(util.signal_and_write, CREG[cluster] + CLUSTER_PSTATE, psreg)
     p.smp_wait(cpu)
     
@@ -178,6 +282,7 @@ def bench_latency(cluster, cpu, from_pstate, to_pstate, verbose=False):
         print(f"Triggered at {tval}")
 
     thresh = 2/ (1/f_init + 1/f_end)
+    inc = f_end > f_init
 
     for i in range(tidx, LOG_ITERS - window - 1):
         ts0, cyc0 = log[i - window]

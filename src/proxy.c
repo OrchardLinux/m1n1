@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #include "proxy.h"
+#include "ans1.h"
 #include "cpufreq.h"
 #include "dapf.h"
 #include "dart.h"
@@ -102,7 +103,8 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_VECTOR:
             // forcefully restore tps6598x IRQs
-            usb_hpm_restore_irqs(1);
+            if (usb_type == USB_TYPE_DWC3)
+                usb_hpm_restore_irqs(1);
             iodev_console_flush();
             next_stage.entry = (generic_func *)request->args[0];
             memcpy(next_stage.args, &request->args[1], 5 * sizeof(u64));
@@ -595,6 +597,30 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_NVME_FLUSH:
             reply->retval = nvme_flush(request->args[0]);
             break;
+        case P_ANS1_INIT:
+            reply->retval = ans1_init();
+            break;
+        case P_ANS1_SHUTDOWN:
+            ans1_shutdown();
+            break;
+        case P_ANS1_READ:
+            reply->retval = ans1_read_main_storage(request->args[0], (void *)request->args[1]);
+            break;
+        case P_ANS1_RESERVED:
+            reply->status = S_BADCMD;
+            break;
+        case P_MAIN_STORAGE_INIT:
+            reply->retval = main_storage_init();
+            break;
+        case P_MAIN_STORAGE_SHUTDOWN:
+            main_storage_shutdown();
+            break;
+        case P_MAIN_STORAGE_READ:
+            reply->retval = main_storage_read(request->args[0], (void *)request->args[1]);
+            break;
+        case P_MAIN_STORAGE_FLUSH:
+            reply->retval = main_storage_flush();
+            break;
 
         case P_MCC_GET_CARVEOUTS:
             reply->retval = (u64)mcc_carveouts;
@@ -625,6 +651,9 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
 
         case P_CPUFREQ_INIT:
             reply->retval = cpufreq_init();
+            break;
+        case P_CPUFREQ_UNRESTRICT_BOOST:
+            cpufreq_unrestrict_boost();
             break;
 
         case P_READ_GIGALOCKER: {

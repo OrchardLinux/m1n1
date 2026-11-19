@@ -507,6 +507,7 @@
 
 #define L2C_ERR_STS_RECURSIVE_FAULT BIT(1)
 #define L2C_ERR_STS_ACCESS_FAULT    BIT(7)
+#define L2C_ERR_STS_PIO_FAULT       BIT(9)
 #define L2C_ERR_STS_ENABLE_W1C      BIT(56)
 
 #define SYS_IMP_APL_L2C_ERR_ADR sys_reg(3, 3, 15, 9, 0)
@@ -538,7 +539,8 @@
 #define CYC_OVRD_DSBL_SNOOP_TIME_MASK     GENMASK(31, 30)
 #define CYC_OVRD_DSBL_SNOOP_TIME_VALUE(x) (ULONG(x) << 30)
 
-#define SYS_IMP_APL_ACC_OVRD sys_reg(3, 5, 15, 6, 0)
+#define SYS_IMP_APL_ACC_OVRD      sys_reg(3, 5, 15, 6, 0)
+#define SYS_IMP_APL_ACC_EBLK_OVRD sys_reg(3, 5, 15, 6, 1)
 
 #define ACC_OVRD_PRE_RESET_CLK_CNTS                     (ULONG(x))
 #define ACC_OVRD_PRE_RESET_CLK_CNTS_MASK                GENMASK(3, 0)
