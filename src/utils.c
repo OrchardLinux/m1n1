@@ -327,7 +327,8 @@ static bool main_storage_start(void)
         /* A9/A9X/A10/A10X: ANS is an NVMe endpoint behind apcie */
         int apcie_node = adt_path_offset(adt, "/arm-io/apcie");
         if (apcie_node >= 0 && (adt_is_compatible(adt, apcie_node, "apcie,t8010") ||
-                                adt_is_compatible(adt, apcie_node, "apcie,s8003"))) {
+                                adt_is_compatible(adt, apcie_node, "apcie,s8003") ||
+                                adt_is_compatible(adt, apcie_node, "apcie,s8000"))) {
             storage_type = STORAGE_TYPE_APCIE;
             return apcie_nvme_init();
         }
