@@ -783,6 +783,8 @@ static const struct apcie_soc apcie_socs[] = {
         .compatible = "apcie,t8010",
         .setup_common = t8010_setup_common,
         .setup_link = t8010_setup_link,
+        /* t8010_setup_link programs lane 0 through the phy-ip window */
+        .has_phy_ip = true,
         .l1ss_ctl1 = 0x40550000,
         .nvmmu_init_busy = NVMMU_TCB_CTRL_BUSY,
         /* pinctrl-apple-gpio direction_output; also clears INPUT_ENABLE */
