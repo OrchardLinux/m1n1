@@ -23,6 +23,8 @@
 
 #define MAX_ENDPOINTS   16
 #define CDC_BUFFER_SIZE SZ_1M
+/* How long a flush waits for a host that reads nothing. */
+#define FLUSH_STALL_US 1000000
 
 #define usb_debug_printf(fmt, ...) debug_printf("usb-dwc3@%lx: " fmt, dev->regs, ##__VA_ARGS__)
 
@@ -1366,6 +1368,9 @@ size_t usb_dwc3_queue(dwc3_dev_t *dev, cdc_acm_pipe_id_t pipe, const void *buf, 
         if (count) {
             usb_dwc3_handle_events(dev);
             usb_dwc3_cdc_start_bulk_in_xfer(dev, ep);
+            /* The host closed the port while the buffer was full: drop the rest. */
+            if (!dev->pipe[pipe].ready)
+                break;
         }
     }
 
@@ -1443,7 +1448,24 @@ void usb_dwc3_flush(dwc3_dev_t *dev, cdc_acm_pipe_id_t pipe)
 
     u8 ep = dev->pipe[pipe].ep_in;
 
-    while (ringbuffer_get_used(device2host) != 0 || dev->endpoints[ep].xfer_in_progress) {
+    /*
+     * Wait while the host reads. A host that has quit (after sending a boot request, say)
+     * reads nothing and may not close the port, so give up once nothing has moved for
+     * FLUSH_STALL_US. Unsent data stays queued and goes out if a host reads again.
+     */
+    size_t used = ringbuffer_get_used(device2host);
+    bool busy = dev->endpoints[ep].xfer_in_progress;
+    u64 deadline = timeout_calculate(FLUSH_STALL_US);
+    while (dev->pipe[pipe].ready && (used != 0 || busy)) {
         usb_dwc3_handle_events(dev);
+        size_t now_used = ringbuffer_get_used(device2host);
+        bool now_busy = dev->endpoints[ep].xfer_in_progress;
+        if (now_used != used || now_busy != busy) {
+            used = now_used;
+            busy = now_busy;
+            deadline = timeout_calculate(FLUSH_STALL_US);
+        } else if (timeout_expired(deadline)) {
+            break;
+        }
     }
 }

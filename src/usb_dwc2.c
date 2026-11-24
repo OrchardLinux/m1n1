@@ -30,6 +30,8 @@
 
 #define MAX_ENDPOINTS   8
 #define CDC_BUFFER_SIZE SZ_1M
+/* How long a flush waits for a host that reads nothing. */
+#define FLUSH_STALL_US 1000000
 
 #define usb_debug_printf(fmt, ...) // uart_printf("usb-dwc2: " fmt, ##__VA_ARGS__)
 // many printf commented due to strict timing requirements
@@ -60,6 +62,8 @@
 #define XFER_BUFFER_BYTES_PER_EP (XFER_BUFFER_SIZE / MAX_ENDPOINTS)
 
 #define XFER_SIZE SZ_16K
+/* One bulk OUT transfer: many packets, with no software between them. */
+#define BULK_OUT_XFER_SIZE (1 << 17)
 
 #define SCRATCHPAD_IOVA   0xbeef0000
 #define EVENT_BUFFER_IOVA 0xdead0000
@@ -119,6 +123,11 @@ typedef struct dwc2_endpoint {
     void *xfer_buffer;
     bool transfer_max;
     u16 max_packet_size;
+    /* Bulk OUT: bytes of the running transfer already in the ring buffer. */
+    u32 out_taken;
+    /* Bulk OUT: bytes received when last looked at, and when that changed. */
+    u32 out_seen;
+    u64 out_seen_ticks;
 } dwc2_endpoint_t;
 
 typedef struct dwc2_dev {
@@ -130,6 +139,7 @@ typedef struct dwc2_dev {
     u32 ep0_buffer_len;
     void *ep0_read_buffer;
     void *dma_page_p;
+    void *bulk_out_buffer[2];
     u32 ep0_read_buffer_len;
 
     const union usb_setup_packet *setup_pkt;
@@ -277,7 +287,9 @@ static const struct cdc_dev_desc cdc_configuration_descriptor = {
         },
 
     /*
-     * CDC ACM interface for virtual uart
+     * Second pipe: a vendor interface, so that no host serial driver sits
+     * between the proxy and the bulk endpoints. The class-specific descriptors
+     * stay, and hosts ignore them here; SET_CONTROL_LINE_STATE still opens it.
      */
 
     .sec_interface_management =
@@ -287,8 +299,8 @@ static const struct cdc_dev_desc cdc_configuration_descriptor = {
             .bInterfaceNumber = 2,
             .bAlternateSetting = 0,
             .bNumEndpoints = 1,
-            .bInterfaceClass = CDC_INTERFACE_CLASS,
-            .bInterfaceSubClass = CDC_INTERFACE_SUBCLASS_ACM,
+            .bInterfaceClass = 0xff,
+            .bInterfaceSubClass = 0,
             .bInterfaceProtocol = CDC_INTERFACE_PROTOCOL_NONE,
             .iInterface = 0,
 
@@ -323,7 +335,7 @@ static const struct cdc_dev_desc cdc_configuration_descriptor = {
             .bInterfaceNumber = 3,
             .bAlternateSetting = 0,
             .bNumEndpoints = 2,
-            .bInterfaceClass = CDC_INTERFACE_CLASS_DATA,
+            .bInterfaceClass = 0xff,
             .bInterfaceSubClass = 0, // unused
             .bInterfaceProtocol = 0, // unused
             .iInterface = 0,
@@ -375,6 +387,7 @@ static const char *ep0_state_names[] = {
 
 static void usb_set_address(dwc2_dev_t *dev, u8 address);
 static void usb_dwc2_ep_hw_recv(dwc2_dev_t *dev, u8 ep, u32 hw_xfer_size, u32 packet_count);
+static void usb_dwc2_cdc_bulk_out_poll(dwc2_dev_t *dev, u8 ep);
 static void usb_dwc2_ep_hw_send(dwc2_dev_t *dev, u8 ep, u32 hw_xfer_size, u32 packet_count);
 static void usb_dwc2_ep_abort(dwc2_dev_t *dev, u8 ep);
 static int usb_dwc2_start_status_phase(dwc2_dev_t *dev, u8 ep);
@@ -894,6 +907,8 @@ void usb_dwc2_handle_events(dwc2_dev_t *dev)
 {
     // usb_debug_printf("------checking int-----\n");
     usb_dwc2_handle_interrupts(dev);
+    usb_dwc2_cdc_bulk_out_poll(dev, USB_LEP_CDC_BULK_OUT);
+    usb_dwc2_cdc_bulk_out_poll(dev, USB_LEP_CDC_BULK_OUT_2);
 }
 
 static void usb_dwc2_ep0_handle_xfer_done(dwc2_dev_t *dev)
@@ -1000,11 +1015,13 @@ static void usb_dwc2_cdc_start_bulk_out_xfer(dwc2_dev_t *dev, u8 endpoint_number
     if (!host2device)
         return;
 
-    if (ringbuffer_get_free(host2device) < XFER_SIZE)
+    if (ringbuffer_get_free(host2device) < BULK_OUT_XFER_SIZE)
         return;
 
-    memset(dev->endpoints[endpoint_number].xfer_buffer, 0xaa, XFER_SIZE);
-    usb_dwc2_ep_hw_recv(dev, endpoint_number, 512, 1);
+    dev->endpoints[endpoint_number].out_taken = 0;
+    dev->endpoints[endpoint_number].out_seen = 0;
+    usb_dwc2_ep_hw_recv(dev, endpoint_number, BULK_OUT_XFER_SIZE,
+                        BULK_OUT_XFER_SIZE / BULK_EP_MAX_PACKET_SIZE);
     dev->endpoints[endpoint_number].xfer_in_progress = true;
 }
 
@@ -1036,28 +1053,57 @@ static void usb_dwc2_cdc_start_bulk_in_xfer(dwc2_dev_t *dev, u8 endpoint_number)
     // USB_DEBUG_PRINT_REGISTERS(dev);
 }
 
-static void usb_dwc2_cdc_handle_bulk_out_xfer_done(dwc2_dev_t *dev, u8 ep)
+static u32 usb_dwc2_cdc_bulk_out_received(dwc2_dev_t *dev, u8 ep)
+{
+    u8 pep = phyEndpoints[ep];
+
+    return BULK_OUT_XFER_SIZE - (read32(dev->regs + DWC2_DOEPTSIZ(pep)) & 0x7ffff);
+}
+
+/* The ring buffer had room for the whole transfer when it started. */
+static void usb_dwc2_cdc_bulk_out_take(dwc2_dev_t *dev, u8 ep, u32 received)
 {
     ringbuffer_t *host2device = usb_dwc2_cdc_get_ringbuffer(dev, ep);
-    if (!host2device)
-        return;
-    u8 ipep = phyEndpoints[USB_LEP_CDC_BULK_OUT];
-    ;
-    if (ep == USB_LEP_CDC_BULK_OUT_2)
-        ipep = phyEndpoints[USB_LEP_CDC_BULK_OUT_2];
-    size_t xfer_siz = 0x200 - (read32(dev->regs + DWC2_DOEPTSIZ(ipep)) & 0x7fff);
-    if (ringbuffer_get_free(host2device) < xfer_siz) {
-        usb_debug_printf("out_xfer_buffer size overflow\n");
-        xfer_siz = ringbuffer_get_free(host2device);
-    }
-    ringbuffer_write(dev->endpoints[ep].xfer_buffer, xfer_siz, host2device);
-    usb_debug_printf("handle_bulk_out_xfer_done: recvd %zd bytes from bulk out\n", xfer_siz);
-    // hexdump(dev->endpoints[ep].xfer_buffer, xfer_siz);
-    dev->endpoints[ep].xfer_in_progress = false;
+    dwc2_endpoint_t *endpoint = &dev->endpoints[ep];
 
-    // usb_debug_printf("handle_bulk_out_xfer_done: DWC2_DOEPTSIZ(2)=%x\n", read32(dev->regs +
-    // DWC2_DOEPTSIZ(2))); usb_debug_printf("handle_bulk_out_xfer_done: ep's buffer=%p\n",
-    // dev->endpoints[ep].xfer_buffer); while(1) {}
+    if (!host2device || received <= endpoint->out_taken)
+        return;
+
+    ringbuffer_write((u8 *)endpoint->xfer_buffer + endpoint->out_taken,
+                     received - endpoint->out_taken, host2device);
+    endpoint->out_taken = received;
+}
+
+static void usb_dwc2_cdc_handle_bulk_out_xfer_done(dwc2_dev_t *dev, u8 ep)
+{
+    usb_dwc2_cdc_bulk_out_take(dev, ep, usb_dwc2_cdc_bulk_out_received(dev, ep));
+    dev->endpoints[ep].xfer_in_progress = false;
+}
+
+/*
+ * A transfer only completes when it is full or on a short packet, and a host need
+ * not end a write with a short packet. Data that has stopped arriving would then
+ * wait forever for a request's last bytes, so pass it on once the endpoint has been
+ * quiet for a moment. The wait also gives the packet's DMA time to finish.
+ */
+static void usb_dwc2_cdc_bulk_out_poll(dwc2_dev_t *dev, u8 ep)
+{
+    dwc2_endpoint_t *endpoint = &dev->endpoints[ep];
+
+    if (!endpoint->xfer_in_progress)
+        return;
+
+    u32 received = usb_dwc2_cdc_bulk_out_received(dev, ep);
+    if (received == endpoint->out_taken)
+        return;
+
+    u64 now = get_ticks();
+    if (received != endpoint->out_seen) {
+        endpoint->out_seen = received;
+        endpoint->out_seen_ticks = now;
+    } else if (now - endpoint->out_seen_ticks > mrs(CNTFRQ_EL0) / 20000) {
+        usb_dwc2_cdc_bulk_out_take(dev, ep, received);
+    }
 }
 
 static int usb_dwc2_start_status_phase(dwc2_dev_t *dev, u8 ep)
@@ -1437,6 +1483,15 @@ dwc2_dev_t *usb_dwc2_init(u64 regs)
         dev->endpoints[i].xfer_buffer = dev->dma_page_p + xferbuffer_offset;
     }
 
+    /* A bulk OUT transfer does not fit an endpoint's share of the DMA page. */
+    for (int i = 0; i < 2; i++) {
+        dev->bulk_out_buffer[i] = memalign(SZ_16K, BULK_OUT_XFER_SIZE);
+        if (!dev->bulk_out_buffer[i])
+            goto error;
+    }
+    dev->endpoints[USB_LEP_CDC_BULK_OUT].xfer_buffer = dev->bulk_out_buffer[0];
+    dev->endpoints[USB_LEP_CDC_BULK_OUT_2].xfer_buffer = dev->bulk_out_buffer[1];
+
     /* prepare CDC ACM interfaces */
     dev->pipe[CDC_ACM_PIPE_0].ep_intr = USB_LEP_CDC_INTR_IN;
     dev->pipe[CDC_ACM_PIPE_0].ep_in = USB_LEP_CDC_BULK_IN;
@@ -1530,6 +1585,8 @@ void usb_dwc2_shutdown(dwc2_dev_t *dev)
         ringbuffer_free(dev->pipe[i].host2device);
     }
 
+    free(dev->bulk_out_buffer[0]);
+    free(dev->bulk_out_buffer[1]);
     free(dev->dma_page_p);
     free(dev);
 }
@@ -1586,6 +1643,9 @@ size_t usb_dwc2_queue(dwc2_dev_t *dev, cdc_acm_pipe_id_t pipe, const void *buf, 
         if (count) {
             usb_dwc2_handle_events(dev);
             usb_dwc2_cdc_start_bulk_in_xfer(dev, ep);
+            /* The host closed the port while the buffer was full: drop the rest. */
+            if (!dev->pipe[pipe].ready)
+                break;
         }
     }
 
@@ -1666,7 +1726,24 @@ void usb_dwc2_flush(dwc2_dev_t *dev, cdc_acm_pipe_id_t pipe)
 
     u8 ep = dev->pipe[pipe].ep_in;
 
-    while (ringbuffer_get_used(device2host) != 0 || dev->endpoints[ep].xfer_in_progress) {
+    /*
+     * Wait while the host reads. A host that has quit (after sending a boot request, say)
+     * reads nothing and may not close the port, so give up once nothing has moved for
+     * FLUSH_STALL_US. Unsent data stays queued and goes out if a host reads again.
+     */
+    size_t used = ringbuffer_get_used(device2host);
+    bool busy = dev->endpoints[ep].xfer_in_progress;
+    u64 deadline = timeout_calculate(FLUSH_STALL_US);
+    while (dev->pipe[pipe].ready && (used != 0 || busy)) {
         usb_dwc2_handle_events(dev);
+        size_t now_used = ringbuffer_get_used(device2host);
+        bool now_busy = dev->endpoints[ep].xfer_in_progress;
+        if (now_used != used || now_busy != busy) {
+            used = now_used;
+            busy = now_busy;
+            deadline = timeout_calculate(FLUSH_STALL_US);
+        } else if (timeout_expired(deadline)) {
+            break;
+        }
     }
 }

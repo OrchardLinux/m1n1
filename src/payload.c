@@ -6,6 +6,7 @@
 #include "payload.h"
 #include "adt.h"
 #include "assert.h"
+#include "bootmgr.h"
 #include "chainload.h"
 #include "cpufreq.h"
 #include "display.h"
@@ -35,6 +36,14 @@ static const u8 initramfs_magic[] = {
 static const u8 empty[] = {0, 0, 0, 0};
 
 // custom logo is RGBA with 256x256 retina logo followed by half resolution
+/*
+ * A boot splash (orchard's format: "OSPL", width and height as little-endian
+ * u32, then the pixels as b, g, r, 0). In place of a custom logo, it lets a
+ * distribution choose the size of the picture drawn while it loads.
+ */
+static const u8 splash_magic[] = {'O', 'S', 'P', 'L'};
+#define SPLASH_MAX_SIDE 4096
+
 static const u8 custom_logo_magic[] = {'m', '1', 'n', '1', '_', 'l', 'o', 'g',
                                        'o', '_', '2', '5', '6', '1', '2', '8'};
 #define CUSTOM_LOGO_SIZE (4 * ((256 * 256) + (128 * 128)))
@@ -176,6 +185,7 @@ static char *chosen[MAX_CHOSEN_VARS];
 #endif
 
 static bool enable_tso = false;
+static bool autoboot = false;
 
 static bool check_var(u8 **p)
 {
@@ -205,6 +215,8 @@ static bool check_var(u8 **p)
         mitigations_configure(val);
     } else if (IS_VAR("tso=")) {
         enable_tso = val[0] == '1';
+    } else if (IS_VAR("autoboot=")) {
+        autoboot = val[0] == '1';
     } else {
         printf("Unknown variable %s\n", *p);
     }
@@ -246,6 +258,12 @@ static void *load_one_payload(void *start, size_t size)
         printf("Found a m1n1 initramfs payload at %p, 0x%x bytes\n", p, size);
         p += sizeof(initramfs_magic) + 4;
         return load_cpio(p, size);
+    } else if (!memcmp(p, splash_magic, sizeof(splash_magic))) {
+        u32 w, h;
+        memcpy(&w, p + 4, 4);
+        memcpy(&h, p + 8, 4);
+        printf("Found a boot splash payload at %p (%ux%u), skipping it\n", p, w, h);
+        return p + 12 + (size_t)w * h * 4;
     } else if (!memcmp(p, custom_logo_magic, sizeof(custom_logo_magic))) {
         printf("Found a m1n1 custom logo payload at %p, skipping 0x%lx bytes\n", p,
                sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE);
@@ -288,6 +306,41 @@ bool payload_logo(void **custom_128, void **custom_256)
     return false;
 }
 
+/*
+ * The boot splash at the start of the payload, if there is one, as pixels
+ * in the logo's byte order (r, g, b, 0): converted in place, once.
+ */
+bool payload_splash(u32 **pixels, u32 *width, u32 *height)
+{
+    static bool converted;
+    u8 *p = _payload_start;
+    u32 w, h;
+
+    if (memcmp(p, splash_magic, sizeof(splash_magic)))
+        return false;
+    memcpy(&w, p + 4, 4);
+    memcpy(&h, p + 8, 4);
+    if (!w || !h || w > SPLASH_MAX_SIDE || h > SPLASH_MAX_SIDE) {
+        printf("Ignoring a boot splash of %ux%u\n", w, h);
+        return false;
+    }
+
+    u8 *px = p + 12;
+    if (!converted) {
+        for (size_t i = 0; i < (size_t)w * h; i++) {
+            u8 b = px[i * 4];
+            px[i * 4] = px[i * 4 + 2];
+            px[i * 4 + 2] = b;
+        }
+        converted = true;
+    }
+    printf("Found a boot splash payload at %p (%ux%u)\n", p, w, h);
+    *pixels = (u32 *)px;
+    *width = w;
+    *height = h;
+    return true;
+}
+
 int payload_run(void)
 {
     const char *target = adt_getprop(adt, 0, "target-type", NULL);
@@ -312,6 +365,10 @@ int payload_run(void)
     if (chainload_spec) {
         return chainload_load(chainload_spec, chosen, chosen_cnt);
     }
+
+    /* No kernel given: boot the default Boot Loader Specification entry from main storage. */
+    if (autoboot && !kernel && !fdt)
+        return bootmgr_autoboot();
 
     if (kernel && fdt) {
         cpufreq_init();
