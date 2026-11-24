@@ -1019,6 +1019,34 @@ static int dt_set_als(void)
 }
 
 /*
+ * The D2355 Lightning charger (A10X iPad Pro 2) scales its input-current
+ * limit by the unit's calibration in the ADT's /charger node. Copy the
+ * table into the charger's node.
+ */
+static int dt_set_charger_calibration(void)
+{
+    int node = fdt_node_offset_by_compatible(dt, -1, "apple,d2355-tristar-charger");
+    if (node < 0)
+        return 0;
+
+    int anode = adt_path_offset(adt, "/charger");
+    if (anode < 0) {
+        printf("ADT: /charger not found\n");
+        return 0;
+    }
+
+    u32 len;
+    const u8 *table = adt_getprop(adt, anode, "usb-input-limit-calibration-hv", &len);
+    if (!table || len != 84) {
+        printf("ADT: charger input-limit calibration missing\n");
+        return 0;
+    }
+    if (fdt_setprop(dt, node, "apple,usb-input-limit-calibration-hv", table, len) < 0)
+        bail("FDT: failed to set apple,usb-input-limit-calibration-hv\n");
+    return 0;
+}
+
+/*
  * The A9's AOP firmware also takes the AOP target number and the chip's ID and
  * revision in its boot arguments, and each motion sensor's factory
  * calibration, which iBoot resolves from syscfg into the sensor's node below
@@ -3229,6 +3257,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_set_multitouch())
         return -1;
     if (dt_set_als())
+        return -1;
+    if (dt_set_charger_calibration())
         return -1;
     if (dt_set_aop())
         return -1;
