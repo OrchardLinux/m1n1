@@ -1,3 +1,8 @@
+> **Orchard's m1n1.** This is AsahiLinux/m1n1 with HoolockLinux's A7-A11 work and
+> [Orchard](https://github.com/OrchardLinux/orchard)'s changes on top, the m1n1 Orchard
+> boots iPhones and iPads with. m1n1 work for Orchard is a pull request here, not in
+> the orchard repository. Don't send it to Asahi or Hoolock.
+
 # m1n1: A bootloader and experimentation playground for Apple Silicon
 
 ## Building
