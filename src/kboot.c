@@ -980,20 +980,18 @@ static int dt_set_touchscreen(void)
  * Ambient light sensor calibration (LSCI). iBoot resolves the ADT's
  * "syscfg/LSCI" reference into the unit's record before m1n1 runs; the
  * sensor sits below an I2C bus (e.g. /arm-io/i2c2/als1).
+ *
+ * Some boards have two sensors (the iPad Air 2: i2c2/als1 at 0x49 and
+ * i2c2/als2 at 0x29), both naming the same syscfg/LSCI record set, which
+ * holds one record per sensor. Their nodes are named by als0 and als1;
+ * each gets the whole set, and the kernel picks the sensor's record by
+ * its placement and orientation.
  */
-static int dt_set_als(void)
+static const u8 *adt_get_als_calibration(u32 *len)
 {
-    const char *path = fdt_get_alias(dt, "als0");
-    if (path == NULL)
-        return 0;
-
-    int node = fdt_path_offset(dt, path);
-    if (node < 0)
-        bail("FDT: als0 alias points at nonexistent node\n");
-
     int arm_io = adt_path_offset(adt, "/arm-io");
     if (arm_io < 0)
-        return 0;
+        return NULL;
 
     int bus = arm_io;
     ADT_FOREACH_CHILD(adt, bus)
@@ -1001,20 +999,43 @@ static int dt_set_als(void)
         int anode = bus;
         ADT_FOREACH_CHILD(adt, anode)
         {
-            u32 len;
-            const u8 *blob = adt_getprop(adt, anode, "alsCalibration", &len);
+            const u8 *blob = adt_getprop(adt, anode, "alsCalibration", len);
             if (!blob)
                 continue;
-            if (!len || (len >= 7 && !memcmp(blob, "syscfg/", 7))) {
+            if (!*len || (*len >= 7 && !memcmp(blob, "syscfg/", 7))) {
                 printf("ADT: ambient light sensor calibration not provisioned\n");
-                return 0;
+                return NULL;
             }
-            if (fdt_setprop(dt, node, "apple,als-calibration", blob, len) < 0)
-                bail("FDT: failed to set apple,als-calibration\n");
-            return 0;
+            return blob;
         }
     }
     printf("ADT: ambient light sensor not found\n");
+    return NULL;
+}
+
+static int dt_set_als(void)
+{
+    static const char *const aliases[] = {"als0", "als1"};
+    const u8 *blob = NULL;
+    u32 len = 0;
+
+    for (size_t i = 0; i < ARRAY_SIZE(aliases); i++) {
+        const char *path = fdt_get_alias(dt, aliases[i]);
+        if (path == NULL)
+            break;
+
+        int node = fdt_path_offset(dt, path);
+        if (node < 0)
+            bail("FDT: %s alias points at nonexistent node\n", aliases[i]);
+
+        if (!blob) {
+            blob = adt_get_als_calibration(&len);
+            if (!blob)
+                return 0;
+        }
+        if (fdt_setprop(dt, node, "apple,als-calibration", blob, len) < 0)
+            bail("FDT: failed to set apple,als-calibration\n");
+    }
     return 0;
 }
 
