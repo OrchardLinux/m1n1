@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Boot Loader Specification Type #1 entries on the XBOOTLDR partition.
 //!
-//! Finds the one XBOOTLDR partition in the GPT, reads its FAT file system,
+//! Finds the one XBOOTLDR partition in the GPT (or, on the 32-bit devices, in
+//! Apple's LwVM table), reads its FAT file system,
 //! parses `/loader/entries/*.conf`, checks every entry against the disk and
 //! sorts them in BLS order (as systemd-boot does). The default entry follows
 //! the `default` pattern of `/loader/loader.conf`, as in systemd-boot.
@@ -10,6 +11,8 @@
 
 use crate::c_size_t;
 use crate::gpt;
+#[cfg(any(target_arch = "arm", test))]
+use crate::lwvm;
 use crate::println;
 use crate::storage;
 use alloc::string::{String, ToString};
@@ -22,6 +25,15 @@ use uuid::{uuid, Uuid};
 
 pub const XBOOTLDR: Uuid = uuid!("bc13c2ff-59e6-4262-a352-b275fd6f7172");
 pub const ROOT_ARM64: Uuid = uuid!("b921b045-1df0-41c3-af44-4c6f280d3fae");
+/// Roots of the 32-bit devices: the Discoverable Partitions type, and plain
+/// "Linux filesystem data" as Orchard's installer marks its LwVM partition.
+#[cfg(any(target_arch = "arm", test))]
+pub const ROOT_ARM: Uuid = uuid!("69dad710-2ce4-4e3c-b16c-21a1d49abed3");
+#[cfg(any(target_arch = "arm", test))]
+pub const LINUX_DATA: Uuid = uuid!("0fc63daf-8483-4772-8e79-3d69d8477de4");
+/// A 32-bit ARM zImage, at offset 36
+#[cfg(target_arch = "arm")]
+const ZIMAGE_MAGIC: [u8; 4] = [0x18, 0x28, 0x6f, 0x01];
 
 const ENTRIES_DIR: &str = "/loader/entries";
 const MAX_ENTRIES: usize = 64;
@@ -365,6 +377,43 @@ where
     with_entries(open, devicetree, |_, listing| Ok(listing))
 }
 
+/// Type, identity and first 4 KiB block of every partition: from the GPT, or
+/// from the LwVM table Apple's 32-bit devices have in its place.
+fn disk_partitions<IO, F>(open: &F) -> Result<Vec<(Uuid, Uuid, u64)>, String>
+where
+    IO: ReadWriteSeek,
+    IO::Error: core::fmt::Debug,
+    F: Fn(u64) -> IO,
+{
+    let mut found = Vec::new();
+    if let Ok(mut table) = gpt::GPT::new(open(0)) {
+        for i in 0..table.count().min(1024) {
+            let part = table
+                .index(i)
+                .map_err(|_| "Partition table read error".to_string())?;
+            found.push((
+                part.get_type_guid(),
+                part.get_partition_guid(),
+                part.get_starting_lba(),
+            ));
+        }
+        return Ok(found);
+    }
+    // Only the 32-bit devices have LwVM disks
+    #[cfg(any(target_arch = "arm", test))]
+    match lwvm::partitions(&mut open(0)) {
+        Ok(Some(parts)) => {
+            return Ok(parts
+                .into_iter()
+                .map(|p| (p.kind, p.id, p.first_block))
+                .collect())
+        }
+        Ok(None) => {}
+        Err(()) => return Err("Partition table read error".to_string()),
+    }
+    Err("No GPT on this disk".to_string())
+}
+
 /// Opens the boot partition, reads and checks its entries in BLS order, picks
 /// the default and hands the listing to `then` along with the partition's root
 /// directory.
@@ -378,20 +427,19 @@ where
     IO::Error: core::fmt::Debug,
     F: Fn(u64) -> IO,
 {
-    let mut table = gpt::GPT::new(open(0)).map_err(|_| "No GPT on this disk".to_string())?;
     let mut boot = None;
     let mut boots = 0;
     let mut roots = Vec::new();
-    for i in 0..table.count().min(1024) {
-        let part = table
-            .index(i)
-            .map_err(|_| "Partition table read error".to_string())?;
-        let kind = part.get_type_guid();
+    for (kind, id, first) in disk_partitions(&open)? {
         if kind == XBOOTLDR {
             boots += 1;
-            boot = Some(part.get_starting_lba());
+            boot = Some(first);
         } else if kind == ROOT_ARM64 {
-            roots.push(part.get_partition_guid());
+            roots.push(id);
+        }
+        #[cfg(any(target_arch = "arm", test))]
+        if kind == ROOT_ARM || kind == LINUX_DATA {
+            roots.push(id);
         }
     }
     let boot = match (boots, boot) {
@@ -576,11 +624,21 @@ where
         }
         let (size, head) = probe(dir, path)?;
         let size = size as usize;
+        #[cfg(not(target_arch = "arm"))]
         let linux = if head[..2] == [0x1f, 0x8b] {
             alloc_slice(size, 64)?
         } else {
             let image_size = u64::from_le_bytes(head[16..24].try_into().unwrap()) as usize;
             &mut alloc_slice(size.max(image_size), KERNEL_ALIGN)?[..size]
+        };
+        // A zImage unpacks itself. The word behind it stays zero, so that its
+        // decompressor does not take whatever follows for an appended tree.
+        #[cfg(target_arch = "arm")]
+        let linux = {
+            let _ = (KERNEL_ALIGN, &head);
+            let buf = alloc_slice(size + 8, 64)?;
+            buf[size..].fill(0);
+            &mut buf[..size]
         };
         read_into(dir, path, linux)?;
         let linux = (linux.as_mut_ptr(), size);
@@ -661,8 +719,14 @@ fn check<IO: ReadWriteSeek>(entry: &mut Entry, dir: &Dir<IO>, roots: &[Uuid], de
     }
     if let Some(path) = entry.get("linux") {
         match probe(dir, path) {
+            #[cfg(not(target_arch = "arm"))]
             Ok((_, head)) if head[..2] == [0x1f, 0x8b] || head[56..60] == *b"ARM\x64" => {}
+            #[cfg(not(target_arch = "arm"))]
             Ok(_) => problems.push(format!("{}: not an arm64 Image", path)),
+            #[cfg(target_arch = "arm")]
+            Ok((_, head)) if head[36..40] == ZIMAGE_MAGIC => {}
+            #[cfg(target_arch = "arm")]
+            Ok(_) => problems.push(format!("{}: not a 32-bit zImage", path)),
             Err(problem) => problems.push(problem),
         }
     }
@@ -1427,6 +1491,102 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(err, "No default boot entry");
+    }
+
+    /// The same disk partitioned the way iOS does on the 32-bit devices: no
+    /// GPT, an LwVM header naming the boot partition and a Linux root.
+    fn lwvm_disk(files: &[(&str, &[u8])], scattered: bool) -> Rc<RefCell<Vec<u8>>> {
+        let d = disk(files, false);
+        {
+            let mut raw = d.borrow_mut();
+            let media = raw.len() as u64;
+            let chunk = media.div_ceil(1024).next_power_of_two();
+            assert_eq!(chunk, 16 * BLOCK);
+            raw[BLOCK as usize..2 * BLOCK as usize].fill(0);
+            let mut h = vec![0u8; BLOCK as usize];
+            h[..16].copy_from_slice(&[
+                0x6a, 0x90, 0x88, 0xcf, 0x8a, 0xfd, 0x63, 0x0a, 0xe3, 0x51, 0xe2, 0x48, 0x87, 0xe0,
+                0xb9, 0x8b,
+            ]);
+            h[0x20..0x28].copy_from_slice(&media.to_le_bytes());
+            h[0x28..0x2c].copy_from_slice(&2u32.to_le_bytes());
+            let mut part = |index: usize, kind: Uuid, id: Uuid, blocks: u64| {
+                let at = 0x200 + index * 0x80;
+                h[at..at + 16].copy_from_slice(kind.as_bytes());
+                h[at + 16..at + 32].copy_from_slice(id.as_bytes());
+                h[at + 40..at + 48].copy_from_slice(&(blocks * BLOCK).to_le_bytes());
+            };
+            part(
+                0,
+                XBOOTLDR,
+                uuid!("11111111-2222-4333-8444-555555555555"),
+                BOOT_BLOCKS,
+            );
+            part(1, LINUX_DATA, Uuid::parse_str(ROOT).unwrap(), 16);
+            let boot_chunks = (BOOT_BLOCKS / 16) as usize;
+            for i in 0..1024usize {
+                let entry: u16 = if i >= 1 && i <= boot_chunks {
+                    (i - 1) as u16
+                } else if i == boot_chunks + 1 {
+                    1 << 12
+                } else {
+                    0xf000
+                };
+                h[0x800 + i * 2..0x802 + i * 2].copy_from_slice(&entry.to_le_bytes());
+            }
+            if scattered {
+                // The boot partition's second chunk says it is its third
+                h[0x804..0x806].copy_from_slice(&2u16.to_le_bytes());
+            }
+            let mut crc = !0u32;
+            for byte in h.iter() {
+                crc ^= *byte as u32;
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xedb88320 & 0u32.wrapping_sub(crc & 1));
+                }
+            }
+            h[0x2c..0x30].copy_from_slice(&(!crc).to_le_bytes());
+            raw[..BLOCK as usize].copy_from_slice(&h);
+        }
+        d
+    }
+
+    #[test]
+    fn lwvm_disks() {
+        let img = image();
+        let a = entry_text("Omarchy", "6.18.2-orchard");
+        let files: Vec<(&str, &[u8])> = vec![
+            (
+                "/loader/entries/omarchy-4d6c1a2b-6.18.2-orchard.conf",
+                a.as_bytes(),
+            ),
+            ("/tok/6.18.2-orchard/linux", &img),
+            ("/tok/6.18.2-orchard/initrd", b"070701"),
+            ("/tok/6.18.2-orchard/t8010-j71b.dtb", DTB),
+        ];
+        let d = lwvm_disk(&files, false);
+        let listing = list(&d, Wanted::File("t8010-j71b.dtb")).unwrap();
+        let [good] = &listing.entries[..] else {
+            panic!()
+        };
+        // The root is found by the identity its LwVM entry carries
+        assert!(good.bootable(), "{:?}", good.problems);
+        assert_eq!(good.root(), Uuid::try_parse(ROOT).ok());
+
+        // A boot partition scattered over the disk is not one range: not listed
+        let scattered = lwvm_disk(&files, true);
+        assert_eq!(
+            list(&scattered, Wanted::Any).err().unwrap(),
+            "Expected exactly one XBOOTLDR boot partition, found 0"
+        );
+
+        // A header that fails its checksum, with no good copy, is no table
+        let damaged = lwvm_disk(&files, false);
+        damaged.borrow_mut()[0x30] ^= 1;
+        assert_eq!(
+            list(&damaged, Wanted::Any).err().unwrap(),
+            "No GPT on this disk"
+        );
     }
 
     #[test]

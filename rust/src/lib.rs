@@ -23,6 +23,8 @@ pub mod float;
 #[cfg(feature = "chainload")]
 pub mod gpt;
 pub mod gpu;
+#[cfg(all(feature = "chainload", any(target_arch = "arm", test)))]
+pub mod lwvm;
 pub mod print;
 #[cfg(feature = "chainload")]
 pub mod storage;
