@@ -2,7 +2,7 @@
 use core::ffi::c_void;
 
 extern "C" {
-    fn iodev_console_write(buf: *const c_void, len: u64);
+    fn iodev_console_write(buf: *const c_void, len: usize);
 }
 
 pub struct IODevConsoleWriter;
@@ -33,7 +33,7 @@ impl IODevConsoleWriter {
 
 #[inline]
 fn write(msg: &str) -> core::fmt::Result {
-    unsafe { iodev_console_write(msg.as_ptr() as _, msg.len() as u64) };
+    unsafe { iodev_console_write(msg.as_ptr() as _, msg.len()) };
     Ok(())
 }
 

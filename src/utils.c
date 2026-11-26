@@ -4,11 +4,13 @@
 #include <stdarg.h>
 
 #include "adt.h"
+#ifndef __arm__
 #include "ans1.h"
 #include "apcie_nvme.h"
 #include "cpu_regs.h"
-#include "iodev.h"
 #include "nvme.h"
+#endif
+#include "iodev.h"
 #include "smp.h"
 #include "types.h"
 #include "utils.h"
@@ -22,7 +24,9 @@ enum storage_type {
 };
 
 bool is_mac;
+#ifndef __arm__
 static enum storage_type storage_type;
+#endif
 
 static char ascii(char s)
 {
@@ -39,7 +43,7 @@ void hexdump(const void *d, size_t len)
     size_t i, off;
     data = (u8 *)d;
     for (off = 0; off < len; off += 16) {
-        printf("%08lx  ", off);
+        printf("%08lx  ", (u64)off);
         for (i = 0; i < 16; i++) {
             if ((i + off) >= len)
                 printf("   ");
@@ -104,9 +108,9 @@ void __assert_fail(const char *assertion, const char *file, unsigned int line, c
 
 void udelay(u32 d)
 {
-    u64 delay = ((u64)d) * mrs(CNTFRQ_EL0) / 1000000;
-    u64 val = mrs(CNTPCT_EL0);
-    while ((mrs(CNTPCT_EL0) - val) < delay)
+    u64 delay = ((u64)d) * timer_freq() / 1000000;
+    u64 val = get_ticks();
+    while ((get_ticks() - val) < delay)
         ;
     sysop("isb");
 }
@@ -114,24 +118,24 @@ void udelay(u32 d)
 u64 ticks_to_msecs(u64 ticks)
 {
     // NOTE: only accurate if freq is even kHz
-    return ticks / (mrs(CNTFRQ_EL0) / 1000);
+    return ticks / (timer_freq() / 1000);
 }
 
 u64 ticks_to_usecs(u64 ticks)
 {
     // NOTE: only accurate if freq is even MHz
-    return ticks / (mrs(CNTFRQ_EL0) / 1000000);
+    return ticks / (timer_freq() / 1000000);
 }
 
 u64 timeout_calculate(u32 usec)
 {
-    u64 delay = ((u64)usec) * mrs(CNTFRQ_EL0) / 1000000;
-    return mrs(CNTPCT_EL0) + delay;
+    u64 delay = ((u64)usec) * timer_freq() / 1000000;
+    return get_ticks() + delay;
 }
 
 bool timeout_expired(u64 timeout)
 {
-    bool expired = mrs(CNTPCT_EL0) > timeout;
+    bool expired = get_ticks() > timeout;
     sysop("isb");
     return expired;
 }
@@ -142,6 +146,7 @@ void flush_and_reboot(void)
     reboot();
 }
 
+#ifndef __arm__
 void spin_init(spinlock_t *lock)
 {
     lock->lock = -1;
@@ -187,6 +192,7 @@ void spin_unlock(spinlock_t *lock)
     if (!--lock->count)
         __atomic_store_n(&lock->lock, -1L, __ATOMIC_RELEASE);
 }
+#endif
 
 bool is_heap(void *addr)
 {
@@ -197,6 +203,7 @@ bool is_heap(void *addr)
     return p > top_of_kernel_data && p < top_of_ram;
 }
 
+#ifndef __arm__
 bool supports_arch_retention(void)
 {
     return mrs(AIDR_EL1) & AIDR_EL1_ARCH_RETENTION;
@@ -211,6 +218,7 @@ bool supports_pan(void)
 {
     return (mrs(ID_AA64MMFR1_EL1) >> 20) & 0xf;
 }
+#endif
 
 // TODO: update mapping?
 u64 top_of_memory_alloc(size_t size)
@@ -232,6 +240,7 @@ u64 top_of_memory_alloc(size_t size)
     return ret;
 }
 
+#ifndef __arm__
 extern void _deep_wfi_helper(void);
 void deep_wfi(void)
 {
@@ -419,3 +428,4 @@ bool main_storage_flush(void)
             __builtin_unreachable();
     }
 }
+#endif

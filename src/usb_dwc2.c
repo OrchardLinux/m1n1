@@ -65,6 +65,15 @@
 /* One bulk OUT transfer: many packets, with no software between them. */
 #define BULK_OUT_XFER_SIZE (1 << 17)
 
+#ifdef __arm__
+/* No cache-coherent DMA on the 32-bit chips: transfer buffers are uncached memory */
+#define dma_memalign(align, size) dma_alloc(align, size)
+#define dma_buf_free(p)           ((void)(p))
+#else
+#define dma_memalign(align, size) memalign(align, size)
+#define dma_buf_free(p)           free(p)
+#endif
+
 #define SCRATCHPAD_IOVA   0xbeef0000
 #define EVENT_BUFFER_IOVA 0xdead0000
 #define XFER_BUFFER_IOVA  0xbabe0000
@@ -1101,7 +1110,7 @@ static void usb_dwc2_cdc_bulk_out_poll(dwc2_dev_t *dev, u8 ep)
     if (received != endpoint->out_seen) {
         endpoint->out_seen = received;
         endpoint->out_seen_ticks = now;
-    } else if (now - endpoint->out_seen_ticks > mrs(CNTFRQ_EL0) / 20000) {
+    } else if (now - endpoint->out_seen_ticks > timer_freq() / 20000) {
         usb_dwc2_cdc_bulk_out_take(dev, ep, received);
     }
 }
@@ -1467,7 +1476,7 @@ dwc2_dev_t *usb_dwc2_init(u64 regs)
     debug_reg_base = regs;
 #endif
 
-    dev->dma_page_p = memalign(SZ_16K, max(DMA_BUFFER_SIZE * MAX_ENDPOINTS, SZ_16K));
+    dev->dma_page_p = dma_memalign(SZ_16K, max(DMA_BUFFER_SIZE * MAX_ENDPOINTS, SZ_16K));
     if (!dev->dma_page_p)
         goto error;
 
@@ -1485,7 +1494,7 @@ dwc2_dev_t *usb_dwc2_init(u64 regs)
 
     /* A bulk OUT transfer does not fit an endpoint's share of the DMA page. */
     for (int i = 0; i < 2; i++) {
-        dev->bulk_out_buffer[i] = memalign(SZ_16K, BULK_OUT_XFER_SIZE);
+        dev->bulk_out_buffer[i] = dma_memalign(SZ_16K, BULK_OUT_XFER_SIZE);
         if (!dev->bulk_out_buffer[i])
             goto error;
     }
@@ -1585,9 +1594,9 @@ void usb_dwc2_shutdown(dwc2_dev_t *dev)
         ringbuffer_free(dev->pipe[i].host2device);
     }
 
-    free(dev->bulk_out_buffer[0]);
-    free(dev->bulk_out_buffer[1]);
-    free(dev->dma_page_p);
+    dma_buf_free(dev->bulk_out_buffer[0]);
+    dma_buf_free(dev->bulk_out_buffer[1]);
+    dma_buf_free(dev->dma_page_p);
     free(dev);
 }
 

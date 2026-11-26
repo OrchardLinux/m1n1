@@ -57,14 +57,22 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
                 return request->args[0];
             return 1;
         case P_CALL: {
+#ifdef __arm__
+            /* Arguments and result are machine words here */
+            u32 (*f)(u32, u32, u32, u32, u32) = (void *)(u32)request->args[0];
+            reply->retval = f(request->args[1], request->args[2], request->args[3],
+                              request->args[4], request->args[5]);
+#else
             generic_func *f = (generic_func *)request->args[0];
             reply->retval = f(request->args[1], request->args[2], request->args[3],
                               request->args[4], request->args[5]);
+#endif
             break;
         }
         case P_GET_BOOTARGS:
             reply->retval = boot_args_addr;
             break;
+#ifndef __arm__
         case P_GET_CPU_FEATURES:
             if (request->args[0] == sizeof(struct midr_part_features))
                 reply->retval = (u64)cpu_features;
@@ -74,6 +82,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
                 reply->retval = 0;
             }
             break;
+#endif
         case P_GET_BASE:
             reply->retval = (u64)_base;
             break;
@@ -117,6 +126,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             memcpy(next_stage.args, &request->args[1], 5 * sizeof(u64));
             next_stage.restore_logo = true;
             return 1;
+#ifndef __arm__
         case P_GL1_CALL:
             reply->retval = gl1_call((void *)request->args[0], request->args[1], request->args[2],
                                      request->args[3], request->args[4]);
@@ -131,6 +141,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_PUT_SIMD_STATE:
             put_simd_state((void *)request->args[0]);
             break;
+#endif
         case P_REBOOT:
             reboot();
             break;
@@ -429,6 +440,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             reply->retval = kboot_set_uboot((void *)request->args[0], (void *)request->args[1]);
             break;
 
+#ifndef __arm__
         case P_PMGR_POWER_ENABLE:
             reply->retval = pmgr_power_enable(request->args[0]);
             break;
@@ -444,6 +456,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_PMGR_RESET:
             reply->retval = pmgr_reset(request->args[0], (const char *)request->args[1]);
             break;
+#endif
 
         case P_IODEV_SET_USAGE:
             iodev_set_usage(request->args[0], request->args[1]);
@@ -470,6 +483,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             usb_iodev_vuart_setup(request->args[0]);
             break;
 
+#ifndef __arm__
         case P_TUNABLES_APPLY_GLOBAL:
             reply->retval = tunables_apply_global((const char *)request->args[0],
                                                   (const char *)request->args[1]);
@@ -552,6 +566,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_HV_ADD_TIME:
             hv_add_time(request->args[0]);
             break;
+#endif
 
         case P_FB_INIT:
             fb_init(request->args[0]);
@@ -585,6 +600,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             fb_improve_logo();
             break;
 
+#ifndef __arm__
         case P_PCIE_INIT:
             pcie_init();
             break;
@@ -616,6 +632,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_ANS1_RESERVED:
             reply->status = S_BADCMD;
             break;
+#endif
         case P_MAIN_STORAGE_INIT:
             reply->retval = main_storage_init();
             break;
@@ -634,6 +651,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             reply->retval = main_storage_flush();
             break;
 
+#ifndef __arm__
         case P_MCC_GET_CARVEOUTS:
             reply->retval = (u64)mcc_carveouts;
             break;
@@ -660,25 +678,28 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_DAPF_INIT:
             reply->retval = dapf_init((const char *)request->args[0], 1);
             break;
+#endif
 
         case P_CPUFREQ_INIT:
             reply->retval = cpufreq_init();
             break;
+#ifndef __arm__
         case P_CPUFREQ_UNRESTRICT_BOOST:
             cpufreq_unrestrict_boost();
             break;
+#endif
 
         case P_READ_GIGALOCKER: {
             size_t size = 0;
             void *data = rust_read_gigalocker(&size);
-            size_t *cmd_buf = (size_t *)request->args[0];
-            cmd_buf[0] = (size_t)data;
+            u64 *cmd_buf = (u64 *)request->args[0];
+            cmd_buf[0] = (u64)data;
             cmd_buf[1] = size;
             reply->retval = size == 0 ? -1 : 0;
             break;
         }
         case P_FREE_GIGALOCKER: {
-            size_t *cmd_buf = (size_t *)request->args[0];
+            u64 *cmd_buf = (u64 *)request->args[0];
             rust_free_gigalocker((void *)cmd_buf[0], cmd_buf[1]);
             break;
         }
@@ -688,14 +709,14 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_BOOT_ENTRIES: {
             size_t size = 0;
             void *text = rust_boot_entries((const char *)request->args[1], &size);
-            size_t *cmd_buf = (size_t *)request->args[0];
-            cmd_buf[0] = (size_t)text;
+            u64 *cmd_buf = (u64 *)request->args[0];
+            cmd_buf[0] = (u64)text;
             cmd_buf[1] = size;
             reply->retval = text ? 0 : -1;
             break;
         }
         case P_BOOT_ENTRIES_FREE: {
-            size_t *cmd_buf = (size_t *)request->args[0];
+            u64 *cmd_buf = (u64 *)request->args[0];
             rust_free_boot_entries((void *)cmd_buf[0], cmd_buf[1]);
             break;
         }

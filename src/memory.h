@@ -3,7 +3,9 @@
 #ifndef MEMORY_H
 #define MEMORY_H
 
+#ifndef __arm__
 #include "cpu_regs.h"
+#endif
 #include "types.h"
 
 #define REGION_RWX_EL0 0x80000000000
@@ -75,12 +77,22 @@ void mmu_add_mapping(u64 from, u64 to, size_t size, u8 attribute_index, u64 perm
 void mmu_rm_mapping(u64 from, size_t size);
 void mmu_map_framebuffer(u64 addr, size_t size);
 
+#ifdef __arm__
+/* Uncached memory for device DMA; dma_release() hands all of it back */
+void *dma_alloc(size_t align, size_t size);
+void dma_release(void);
+#endif
+
 u64 mmu_disable(void);
 void mmu_restore(u64 state);
 
 static inline bool mmu_active(void)
 {
+#ifdef __arm__
+    return cp15_read(CP15_SCTLR) & SCTLR_M;
+#else
     return mrs(SCTLR_EL1) & SCTLR_M;
+#endif
 }
 
 #endif

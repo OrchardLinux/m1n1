@@ -26,7 +26,13 @@
 static const u8 gz_magic[] = {0x1f, 0x8b};
 static const u8 xz_magic[] = {0xfd, '7', 'z', 'X', 'Z', 0x00};
 static const u8 fdt_magic[] = {0xd0, 0x0d, 0xfe, 0xed};
+#ifdef __arm__
+static const u8 kernel_magic[] = {0x18, 0x28, 0x6f, 0x01}; // a zImage
+#define KERNEL_MAGIC_OFFSET 0x24
+#else
 static const u8 kernel_magic[] = {'A', 'R', 'M', 0x64};          // at 0x38
+#define KERNEL_MAGIC_OFFSET 0x38
+#endif
 static const u8 cpio_magic[] = {'0', '7', '0', '7', '0'};        // '1' or '2' next
 static const u8 img4_magic[] = {0x16, 0x04, 'I', 'M', 'G', '4'}; // IA5String 'IMG4'
 static const u8 sig_magic[] = {'m', '1', 'n', '1', '_', 's', 'i', 'g'};
@@ -140,6 +146,28 @@ static void *load_cpio(void *p, size_t size)
     return ((u8 *)p) + size;
 }
 
+#ifdef __arm__
+/*
+ * A zImage says where it ends. It is entered where it lies, so it gets a
+ * word-aligned place of its own, with zeros behind it: a kernel built to
+ * accept an appended device tree looks there for one.
+ */
+static void *load_kernel(void *p, size_t size)
+{
+    u32 start, end;
+
+    UNUSED(size);
+    memcpy(&start, (u8 *)p + 0x28, 4);
+    memcpy(&end, (u8 *)p + 0x2c, 4);
+
+    u32 length = end - start;
+    u8 *copy = heapblock_alloc_aligned(length + 8, SZ_4K);
+    memcpy(copy, p, length);
+    memset(copy + length, 0, 8);
+    kernel = (void *)copy;
+    return ((u8 *)p) + length;
+}
+#else
 static void *load_kernel(void *p, size_t size)
 {
     kernel = p;
@@ -166,6 +194,7 @@ static void *load_kernel(void *p, size_t size)
         return NULL;
     }
 }
+#endif
 
 #define MAX_VAR_NAME 64
 #define MAX_VAR_SIZE 1024
@@ -243,7 +272,7 @@ static void *load_one_payload(void *start, size_t size)
     } else if (!memcmp(p, cpio_magic, sizeof cpio_magic)) {
         printf("Found a cpio initramfs at %p\n", p);
         return load_cpio(p, size);
-    } else if (!memcmp(p + 0x38, kernel_magic, sizeof kernel_magic)) {
+    } else if (!memcmp(p + KERNEL_MAGIC_OFFSET, kernel_magic, sizeof kernel_magic)) {
         printf("Found a kernel at %p\n", p);
         return load_kernel(p, size);
     } else if (!memcmp(p, sig_magic, sizeof sig_magic)) {
@@ -266,7 +295,7 @@ static void *load_one_payload(void *start, size_t size)
         return p + 12 + (size_t)w * h * 4;
     } else if (!memcmp(p, custom_logo_magic, sizeof(custom_logo_magic))) {
         printf("Found a m1n1 custom logo payload at %p, skipping 0x%lx bytes\n", p,
-               sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE);
+               (u64)(sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE));
         return p + sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE;
     } else if (check_var(&p)) {
         return p;
@@ -280,12 +309,14 @@ static void *load_one_payload(void *start, size_t size)
     }
 }
 
+#ifndef __arm__
 void do_enable_tso(void)
 {
     u64 actlr = mrs(ACTLR_EL1);
     actlr |= BIT(1); // Enable TSO
     msr(ACTLR_EL1, actlr);
 }
+#endif
 
 bool payload_logo(void **custom_128, void **custom_256)
 {
@@ -350,6 +381,13 @@ int payload_run(void)
         while (*target && p != expect_compatible + sizeof(expect_compatible) - 1) {
             *p++ = tolower(*target++);
         }
+#ifdef __arm__
+        /* The 32-bit trees name a board as iBoot does, with "ap" behind the target type */
+        if (p + 2 < expect_compatible + sizeof(expect_compatible)) {
+            *p++ = 'a';
+            *p++ = 'p';
+        }
+#endif
         *p = 0;
         printf("Devicetree compatible value: %s\n", expect_compatible);
     } else {
@@ -361,6 +399,24 @@ int payload_run(void)
 
     while (p)
         p = load_one_payload(p, 0);
+
+#ifdef __arm__
+    /*
+     * What does not fit into the image iBoot loads as its kernel can come as
+     * iBoot's ramdisk instead: the same payloads, where the Apple device
+     * tree says iBoot put it.
+     */
+    int memory_map = adt_path_offset(adt, "/chosen/memory-map");
+    u32 ramdisk[2];
+    if (memory_map >= 0 && ADT_GETPROP_ARRAY(adt, memory_map, "RAMDisk", ramdisk) >= 0 &&
+        ramdisk[0] && ramdisk[1]) {
+        printf("Checking the ramdisk at 0x%x (0x%x bytes) for payloads...\n", ramdisk[0],
+               ramdisk[1]);
+        p = (void *)ramdisk[0];
+        while (p)
+            p = load_one_payload(p, 0);
+    }
+#endif
 
     if (chainload_spec) {
         return chainload_load(chainload_spec, chosen, chosen_cnt);
@@ -374,6 +430,7 @@ int payload_run(void)
         cpufreq_init();
         smp_start_secondaries();
         mitigations_perform();
+#ifndef __arm__
         if (enable_tso) {
 
             do_enable_tso();
@@ -387,6 +444,7 @@ int payload_run(void)
             }
             kboot_set_chosen("apple,tso", "");
         }
+#endif
 
         for (size_t i = 0; i < chosen_cnt; i++) {
             char *val = memchr(chosen[i], '=', MAX_VAR_NAME + 1);

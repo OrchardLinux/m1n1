@@ -139,6 +139,61 @@ void run_actions(void)
     uartproxy_run(NULL);
 }
 
+#ifdef __arm__
+void next_stage_enter(void *entry, u32 r0, u32 r1, u32 r2);
+void l2cache_shutdown(void);
+
+/* The 32-bit chips: iBoot's picture stays up, and one core does all the work */
+void m1n1_main(void)
+{
+    printf("\n\nm1n1 %s\n", m1n1_version);
+    printf("Copyright The Asahi Linux Contributors\n");
+    printf("Licensed under the MIT license\n\n");
+
+    firmware_init();
+
+    heapblock_init();
+
+    mmu_init();
+    wdt_disable();
+
+#ifdef USE_FB
+    fb_init(true);
+    fb_display_logo();
+#ifdef FB_SILENT_MODE
+    fb_set_active(!cur_boot_args.video.display);
+#else
+    fb_set_active(true);
+#endif
+#endif
+
+    printf("Initialization complete.\n");
+
+    run_actions();
+
+    if (!next_stage.entry) {
+        panic("Nothing to do!\n");
+    }
+
+    printf("Preparing to run next stage at %p...\n", next_stage.entry);
+
+    main_storage_shutdown();
+    exception_shutdown();
+    usb_iodev_shutdown();
+#ifdef USE_FB
+    fb_shutdown(next_stage.restore_logo);
+#endif
+    printf("Vectoring to next stage...\n");
+    iodev_console_flush();
+
+    mmu_shutdown();
+    l2cache_shutdown();
+
+    next_stage_enter(next_stage.entry, next_stage.args[0], next_stage.args[1], next_stage.args[2]);
+
+    panic("Next stage returned!\n");
+}
+#else
 void m1n1_main(void)
 {
     printf("\n\nm1n1 %s\n", m1n1_version);
@@ -211,3 +266,4 @@ void m1n1_main(void)
 
     panic("Next stage returned!\n");
 }
+#endif
