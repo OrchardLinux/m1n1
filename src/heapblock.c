@@ -32,7 +32,8 @@ void heapblock_set_limit(void *limit)
 {
     heap_limit = limit;
     if (limit)
-        printf("Heap limit: %p (%ld MiB)\n", limit, ((u8 *)limit - (u8 *)heap_base) >> 20);
+        printf("Heap limit: %p (%ld MiB)\n", limit,
+               (s64)(((u8 *)limit - (u8 *)heap_base) >> 20));
     else
         printf("Heap limit: none\n");
 }
@@ -50,7 +51,8 @@ void *heapblock_alloc_aligned(size_t size, size_t align)
     uintptr_t block = (((uintptr_t)heap_base) + align - 1) & ~(align - 1);
 
     if (heap_limit && block + size > (uintptr_t)heap_limit)
-        panic("heapblock: out of memory (%zu bytes at 0x%lx, limit %p)\n", size, block, heap_limit);
+        panic("heapblock: out of memory (%zu bytes at 0x%lx, limit %p)\n", size, (u64)block,
+              heap_limit);
 
     heap_base = (void *)(block + size);
 

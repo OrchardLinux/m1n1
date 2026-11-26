@@ -36,12 +36,16 @@ void smp_send_ipi(int cpu);
 
 static inline int smp_id(void)
 {
+#ifdef __arm__
+    return 0;
+#else
     if (in_el3())
         return mrs(TPIDR_EL3);
     else if (in_el2())
         return mrs(TPIDR_EL2);
     else
         return mrs(TPIDR_EL1);
+#endif
 }
 
 extern int boot_cpu_idx;

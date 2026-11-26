@@ -25,10 +25,14 @@ extern struct iodev iodev_usb_vuart;
 /* clang-format off */
 struct iodev *iodevs[IODEV_NUM] = {
     [IODEV_UART] = &iodev_uart,
+#ifndef __arm__
     [IODEV_DOCKCHANNEL_UART] = &iodev_dockchannel_uart,
+#endif
     [IODEV_FB] = &iodev_fb,
     [IODEV_USB_VUART] = &iodev_usb_vuart,
+#ifndef __arm__
     [IODEV_LOG] = &iodev_log,
+#endif
 };
 /* clang-format on */
 

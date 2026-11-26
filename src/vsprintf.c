@@ -101,9 +101,23 @@
 #define VA_SHIFT(ap, value, type) /* No-op for ANSI C. */
 
 #define ULLONG    unsigned long long
-#define UINTMAX_T unsigned long
-#define LLONG     long
-#define INTMAX_T  long
+#ifdef __arm__
+/*
+ * 32-bit build. m1n1 prints its u64 values with %lx, so %l reads 64 bits
+ * here; a real long or size_t has to go through %z or a cast to u64.
+ */
+#define UINTMAX_T    unsigned long long
+#define LLONG        long long
+#define INTMAX_T     long long
+#define PRINTF_LONG  long long
+#define PRINTF_ULONG unsigned long long
+#else
+#define UINTMAX_T    unsigned long
+#define LLONG        long
+#define INTMAX_T     long
+#define PRINTF_LONG  long int
+#define PRINTF_ULONG unsigned long int
+#endif
 
 /* Support for uintptr_t. */
 #ifndef UINTPTR_T
@@ -379,7 +393,7 @@ int vsnprintf(char *str, size_t size, const char *format, va_list args)
                                 value = (short int)va_arg(args, int);
                                 break;
                             case PRINT_C_LONG:
-                                value = va_arg(args, long int);
+                                value = va_arg(args, PRINTF_LONG);
                                 break;
                             case PRINT_C_LLONG:
                                 value = va_arg(args, LLONG);
@@ -421,7 +435,7 @@ int vsnprintf(char *str, size_t size, const char *format, va_list args)
                                 value = (unsigned short int)va_arg(args, unsigned int);
                                 break;
                             case PRINT_C_LONG:
-                                value = va_arg(args, unsigned long int);
+                                value = va_arg(args, PRINTF_ULONG);
                                 break;
                             case PRINT_C_LLONG:
                                 value = va_arg(args, ULLONG);

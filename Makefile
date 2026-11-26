@@ -1,3 +1,6 @@
+# M1N1_ARCH=arm builds the 32-bit m1n1 for Apple's ARMv7 chips (see arm32.mk).
+M1N1_ARCH ?= aarch64
+
 RUSTARCH ?= aarch64-unknown-none-softfloat
 
 ifeq ($(shell uname),Darwin)
@@ -207,11 +210,17 @@ TARGET := m1n1.macho
 TARGET_IDEVICE := m1n1-idevice.macho
 TARGET_MONITOR := monitor-stub.macho
 TARGET_RAW := m1n1.bin
+ALL_TARGETS := build/$(TARGET) build/$(TARGET_IDEVICE) build/$(TARGET_MONITOR) build/$(TARGET_RAW)
+BIN_OBJ_FORMAT := -B aarch64 -O elf64-littleaarch64
+
+ifeq ($(M1N1_ARCH),arm)
+include arm32.mk
+endif
 
 DEPDIR := build/.deps
 
 .PHONY: all clean format invoke_cc always_rebuild
-all: build/$(TARGET) build/$(TARGET_IDEVICE) build/$(TARGET_MONITOR) build/$(TARGET_RAW)
+all: $(ALL_TARGETS)
 clean:
 	rm -rf build/* build/.deps
 format:
@@ -316,7 +325,7 @@ build/%.bin: data/%.bin
 build/%.o: build/%.bin
 	$(QUIET)echo "  BIN   $@"
 	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
+	$(QUIET)$(OBJCOPY) -I binary $(BIN_OBJ_FORMAT) $< $@
 
 build/%.bin: font/%.bin
 	$(QUIET)echo "  CP    $@"

@@ -79,6 +79,10 @@ static void *unpack_kernel(void *image, size_t size)
     const u8 *p = image;
     if (size < 2 || p[0] != 0x1f || p[1] != 0x8b)
         return image;
+#ifdef __arm__
+    printf("bootmgr: a 32-bit kernel is a zImage, not a gzip file\n");
+    return NULL;
+#else
 
     /* Nothing may allocate until the result is reserved below. */
     void *dest = heapblock_alloc_aligned(0, KERNEL_ALIGN);
@@ -101,6 +105,7 @@ static void *unpack_kernel(void *image, size_t size)
     }
     printf("bootmgr: kernel %zu bytes uncompressed to %u\n", size, dest_len);
     return dest;
+#endif
 }
 
 /*

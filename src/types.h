@@ -20,10 +20,15 @@ typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
+#ifdef __arm__
+/* 32-bit: uintptr_t and ptrdiff_t are the compiler's */
+typedef s32 ssize_t;
+#else
 typedef u64 uintptr_t;
 typedef s64 ptrdiff_t;
 
 typedef s64 ssize_t;
+#endif
 
 #endif
 
@@ -49,7 +54,11 @@ typedef s64 ssize_t;
 #define SZ_1M  (1 << 20)
 #define SZ_32M (1 << 25)
 
+#ifdef __arm__
+#define BIT(x)                 (1ULL << (x))
+#else
 #define BIT(x)                 (1UL << (x))
+#endif
 #define MASK(x)                (BIT(x) - 1)
 #define GENMASK(msb, lsb)      ((BIT((msb + 1) - (lsb)) - 1) << (lsb))
 #define _FIELD_LSB(field)      ((field) & ~(field - 1))
