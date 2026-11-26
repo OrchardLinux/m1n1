@@ -31,7 +31,7 @@ BASE_CFLAGS := -O2 -Wall -g -Wundef -Werror=strict-prototypes -fno-common -fno-P
 	-Wsign-compare -Wunused-parameter -Wno-multichar \
 	-ffreestanding -fpic -ffunction-sections -fdata-sections \
 	-nostdinc -isystem $(shell $(CC) -print-file-name=include) -isystem sysinc \
-	-Isrc \
+	-Isrc -Isrc/arm32/sftl/include \
 	-fno-stack-protector -march=armv7-a -marm -mfloat-abi=soft -mno-unaligned-access \
 	-DASM_ARCH=\"$(ASM_ARCH)\" \
 	-Wno-format -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
@@ -53,8 +53,16 @@ ARM32_OBJECTS := $(patsubst %,arm32/%, \
 	a32_time.o \
 	a32_kboot.o \
 	a32_wdt.o \
-	a32_storage.o \
 	a32_usb.o)
+
+# Orchard's reader for Apple's flash translation layers, from its Linux
+# driver (GPL-2.0-only; see src/arm32/sftl/README).
+SFTL_OBJECTS := $(patsubst %,arm32/sftl/%, \
+	apple-sftl-core.o \
+	apple-sftl-account.o \
+	mtd-apple-h2fmi.o \
+	rbtree.o \
+	sftl_shim.o)
 
 OBJECTS := \
 	adt.o \
@@ -76,11 +84,14 @@ OBJECTS := \
 	utils.o \
 	vsprintf.o \
 	$(ARM32_OBJECTS) \
+	$(SFTL_OBJECTS) \
 	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS)
 
 FP_OBJECTS :=
 
 BUILD_OBJS := $(patsubst %,build/%,$(OBJECTS))
+# Kernel code, built as the kernel builds it
+$(patsubst %,build/%,$(SFTL_OBJECTS)): CFLAGS += -Wno-unused-parameter -Wno-sign-compare -Wno-unused-function
 BUILD_FP_OBJS :=
 BUILD_ALL_OBJS := $(BUILD_OBJS) $(BUILD_RUST_LIB)
 
