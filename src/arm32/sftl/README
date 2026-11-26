@@ -1,0 +1,34 @@
+Flash reading for the 32-bit chips
+==================================
+
+The 32-bit devices keep their disk on raw PPN NAND behind Apple's own
+translation layers (VFL and SwissPPNFTL), not on NVMe. This directory lets
+m1n1 read that disk: the controller, the translation maps, and under them
+the 4 KiB blocks m1n1's main storage hands out. It is read-only.
+
+The code is the read half of Orchard's Linux drivers, taken unchanged so
+that what Linux and m1n1 know about the format cannot drift apart:
+
+  apple-sftl-core.c       drivers/mtd/apple-sftl-core.c, from its start up to
+                          and including apple_sftl_read(), followed by
+                          apple_sftl_get_info()
+  apple-sftl-account.c    drivers/mtd/apple-sftl-account.c
+  apple-sftl*.h           drivers/mtd/
+  include/linux/mtd/      include/linux/mtd/apple-ppn.h
+  mtd-apple-h2fmi.c       drivers/mtd/devices/mtd-apple-h2fmi.c: the
+                          definitions, the command and read paths and the
+                          PPN page read, between the two markers in the
+                          file; m1n1's storage glue follows them
+  mtd-apple-h2fmi.h       drivers/mtd/devices/mtd-apple-h2fmi.h
+  rbtree.c, include/linux/rbtree*.h
+                          Linux v6.12 lib/rbtree.c and its headers
+
+To follow a change of the Linux drivers, copy the same ranges again.
+
+What Linux provides and m1n1 does not is in include/linux/kernel.h (the
+other headers there only include it) and sftl_shim.c. Those two files and
+the storage glue are m1n1's own (MIT).
+
+Licence: the files from Linux are GPL-2.0-only (rbtree: GPL-2.0-or-later),
+see 3rdparty_licenses/LICENSE.GPL-2. They are only part of the 32-bit build
+(make M1N1_ARCH=arm), which therefore is distributed under the GPL.

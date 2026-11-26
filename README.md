@@ -96,6 +96,10 @@ Portions of m1n1 are based on mini:
 * Copyright (C) 2008-2010 Sven Peter <sven@svenpeter.dev>
 * Copyright (C) 2008-2010 Andre Heider <a.heider@gmail.com>
 
+The 32-bit build (`make M1N1_ARCH=arm`) embeds the flash reader of Orchard's Linux
+drivers and Linux's red-black tree ([src/arm32/sftl](src/arm32/sftl/README)), which are
+[GPL-2](3rdparty_licenses/LICENSE.GPL-2) licensed; that build is distributed under the GPL.
+
 m1n1 embeds libfdt, which is dual [BSD](3rdparty_licenses/LICENSE.BSD-2.libfdt) and
 [GPL-2](3rdparty_licenses/LICENSE.GPL-2) licensed and copyright:
 
