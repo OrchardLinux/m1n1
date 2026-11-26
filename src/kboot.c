@@ -1065,6 +1065,10 @@ static const char *const aop_sensor_calibrations[] = {
     "pressure-offset-calibration",
     "pressure-accel-sensitivity",
     "pressure-heater-resistance",
+    /* compass: the A11 AOP's magnetometer */
+    "compass-calibration",
+    "compass-orientation",
+    "compass-sens-calibration",
 };
 
 static int dt_set_aop_sensors(int node)
