@@ -3067,6 +3067,46 @@ void kboot_set_initrd(void *start, size_t size)
     initrd_size = size;
 }
 
+/*
+ * A ramdisk iBoot loaded as well (`irecovery -c ramdisk`, an rdsk image) is a
+ * second initramfs: iBoot notes it in /chosen/memory-map as RAMDisk, below
+ * top_of_kernel_data (so below m1n1's heap). Copy it right after the first
+ * one; Linux unpacks both, the zeros between them skipped. The kernel image
+ * itself stays small -- iBoot refuses a large rkrn.
+ */
+static void kboot_append_iboot_ramdisk(void)
+{
+    int node = adt_path_offset(adt, "/chosen/memory-map");
+    u64 rd[2];
+
+    if (node < 0 || ADT_GETPROP_ARRAY(adt, node, "RAMDisk", rd) != sizeof(rd) || !rd[1])
+        return;
+    if (rd[0] >= cur_boot_args.virt_base)
+        rd[0] = rd[0] - cur_boot_args.virt_base + cur_boot_args.phys_base;
+    printf("kboot: iBoot ramdisk at 0x%lx, 0x%lx bytes (top of kernel data 0x%lx)\n", rd[0],
+           rd[1], cur_boot_args.top_of_kernel_data);
+
+    const u8 *src = (const u8 *)rd[0];
+    if (src[0] != 0x1f || src[1] != 0x8b) {
+        printf("kboot: the ramdisk is not a gzip'd cpio, left out\n");
+        return;
+    }
+
+    size_t first = ALIGN_UP(initrd_size, 4);
+    u8 *buf = memalign(SZ_16K, first + rd[1]);
+    if (!buf) {
+        printf("kboot: no memory for the ramdisk, left out\n");
+        return;
+    }
+    if (initrd_start)
+        memcpy(buf, initrd_start, initrd_size);
+    memset(buf + initrd_size, 0, first - initrd_size);
+    memcpy(buf + first, src, rd[1]);
+    initrd_start = buf;
+    initrd_size = first + rd[1];
+    printf("kboot: initrd + ramdisk: 0x%lx bytes\n", initrd_size);
+}
+
 int kboot_set_chosen(const char *name, const char *value)
 {
     int i = 0;
@@ -3254,6 +3294,8 @@ int kboot_prepare_dt(void *fdt)
 
     /* setup console log buffer early to capture as much log as possible */
     dt_setup_mtd_phram();
+
+    kboot_append_iboot_ramdisk();
 
     if (dt_set_chosen())
         return -1;
