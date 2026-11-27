@@ -7,6 +7,7 @@
 #include "pmgr.h"
 #include "rtkit.h"
 #include "sart.h"
+#include "soc.h"
 #include "string.h"
 #include "utils.h"
 
@@ -17,12 +18,19 @@
 #define NVME_QUEUE_SIZE_T8015 0x10
 #define NVME_QUEUE_SIZE_T8103 0x40
 
+/* The A12's firmware accepts no other admin queue depth. */
+#define NVME_AQ_DEPTH_T8020 2
+/* How many translation blocks iBoot leaves the A12's NVMMU with. */
+#define NVME_TCBS_T8020 0x40
+
 #define NVME_CC            0x14
 #define NVME_CC_SHN        GENMASK(15, 14)
 #define NVME_CC_SHN_NONE   0
 #define NVME_CC_SHN_NORMAL 1
 #define NVME_CC_SHN_ABRUPT 2
 #define NVME_CC_EN         BIT(0)
+#define NVME_CC_IOSQES     GENMASK(19, 16)
+#define NVME_CC_IOCQES     GENMASK(23, 20)
 
 #define NVME_CSTS             0x1c
 #define NVME_CSTS_SHST        GENMASK(3, 2)
@@ -52,17 +60,20 @@
 #define NVME_DB_LINEAR_ASQ      0x2490c
 #define NVME_DB_LINEAR_IOSQ     0x24910
 
-#define NVMMU_NUM       0x28100
-#define NVMMU_ASQ_BASE  0x28108
-#define NVMMU_IOSQ_BASE 0x28110
-#define NVMMU_TCB_INVAL 0x28118
-#define NVMMU_TCB_STAT  0x29120
+#define NVMMU_NUM            0x28100
+#define NVMMU_ASQ_BASE       0x28108
+#define NVMMU_IOSQ_BASE      0x28110
+#define NVMMU_TCB_INVAL      0x28118
+#define NVMMU_TCB_STAT       0x29120
+#define NVMMU_TCB_STAT_T8020 0x28120
 
-#define NVME_ADMIN_CMD_DELETE_SQ 0x00
-#define NVME_ADMIN_CMD_CREATE_SQ 0x01
-#define NVME_ADMIN_CMD_DELETE_CQ 0x04
-#define NVME_ADMIN_CMD_CREATE_CQ 0x05
-#define NVME_QUEUE_CONTIGUOUS    BIT(0)
+#define NVME_ADMIN_CMD_DELETE_SQ    0x00
+#define NVME_ADMIN_CMD_CREATE_SQ    0x01
+#define NVME_ADMIN_CMD_DELETE_CQ    0x04
+#define NVME_ADMIN_CMD_CREATE_CQ    0x05
+#define NVME_ADMIN_CMD_SET_FEATURES 0x09
+#define NVME_FEATURE_NUM_QUEUES     0x07
+#define NVME_QUEUE_CONTIGUOUS       BIT(0)
 
 #define NVME_CMD_FLUSH 0x00
 #define NVME_CMD_WRITE 0x01
@@ -121,6 +132,7 @@ struct nvme_queue {
     u8 cq_head;
     u8 cq_phase;
     u8 sq_tail;
+    size_t cmdq_size;
 
     bool adminq;
 };
@@ -131,6 +143,11 @@ static_assert(sizeof(struct apple_nvmmu_tcb) == 128, "invalid apple_nvmmu_tcb si
 
 static enum {
     NVME_T8015 = 2,
+    /*
+     * The A12 sits between the two: it has the NVMMU of the M1 in front of
+     * the A11's ring queues, with 64-byte IO submission queue entries.
+     */
+    NVME_T8020 = 3,
     NVME_T8103 = 4,
     NVME_T8132 = 5,
 } nvme_type;
@@ -148,10 +165,27 @@ static u8 nvme_queue_size;
 
 static struct nvme_queue adminq, ioq;
 
+static bool nvme_has_nvmmu(void)
+{
+    return nvme_type >= NVME_T8020;
+}
+
+static u8 nvme_queue_depth(struct nvme_queue *q)
+{
+    if (nvme_type == NVME_T8020 && q->adminq)
+        return NVME_AQ_DEPTH_T8020;
+    return nvme_queue_size;
+}
+
+static size_t nvme_tcb_count(void)
+{
+    return nvme_type == NVME_T8020 ? NVME_TCBS_T8020 : nvme_queue_size;
+}
+
 static bool alloc_queue(struct nvme_queue *q, bool adminq)
 {
     size_t cmdq_size;
-    if (adminq || nvme_type >= NVME_T8103)
+    if (adminq || nvme_has_nvmmu())
         cmdq_size = nvme_queue_size * sizeof(*q->cmds);
     else
         cmdq_size = nvme_queue_size * NVME_IOSQES_128;
@@ -166,12 +200,12 @@ static bool alloc_queue(struct nvme_queue *q, bool adminq)
     if (!q->cqes)
         goto free_cmds;
 
-    if (nvme_type >= NVME_T8103) {
-        q->tcbs = memalign(SZ_16K, nvme_queue_size * sizeof(*q->tcbs));
+    if (nvme_has_nvmmu()) {
+        q->tcbs = memalign(SZ_16K, nvme_tcb_count() * sizeof(*q->tcbs));
         if (!q->tcbs)
             goto free_cqes;
 
-        memset(q->tcbs, 0, nvme_queue_size * sizeof(*q->tcbs));
+        memset(q->tcbs, 0, nvme_tcb_count() * sizeof(*q->tcbs));
     }
 
     memset(q->cmds, 0, cmdq_size);
@@ -179,6 +213,7 @@ static bool alloc_queue(struct nvme_queue *q, bool adminq)
     q->cq_head = 0;
     q->cq_phase = 1;
     q->adminq = adminq;
+    q->cmdq_size = cmdq_size;
     return true;
 
 free_cqes:
@@ -193,6 +228,16 @@ static void free_queue(struct nvme_queue *q)
     free(q->cmds);
     free(q->tcbs);
     free(q->cqes);
+}
+
+/* SART entries for a queue's memory, each rounded out to 4K. */
+static bool nvme_sart_allow(struct nvme_queue *q)
+{
+    return sart_add_allowed_region(nvme_sart, q->cmds, ALIGN_UP(q->cmdq_size, SZ_4K)) &&
+           sart_add_allowed_region(nvme_sart, q->cqes,
+                                   ALIGN_UP(nvme_queue_size * sizeof(*q->cqes), SZ_4K)) &&
+           sart_add_allowed_region(nvme_sart, q->tcbs,
+                                   ALIGN_UP(nvme_tcb_count() * sizeof(*q->tcbs), SZ_4K));
 }
 
 static void nvme_poll_syslog(void)
@@ -267,6 +312,48 @@ static u8 nvme_submit_command_t8015(struct nvme_queue *q, struct nvme_command *c
 }
 
 /*
+ * Submit command using a ring SQ behind the NVMMU (A12).
+ * The firmware finds the translation block by the command's position in the
+ * ring, not by its tag; invalidation goes by tag.
+ * Returns: Expected tag in CQ
+ */
+static u8 nvme_submit_command_t8020(struct nvme_queue *q, struct nvme_command *cmd)
+{
+    u8 slot = q->sq_tail;
+    u8 tag = slot + 1;
+    struct nvme_command *queue_cmd = &q->cmds[slot];
+    struct apple_nvmmu_tcb *tcb = &q->tcbs[slot];
+
+    memcpy(queue_cmd, cmd, sizeof(*cmd));
+    queue_cmd->tag = tag;
+
+    memset(tcb, 0, sizeof(*tcb));
+    if (!queue_cmd->prp1)
+        tcb->dma_flags = 0;
+    else if (queue_cmd->opcode & 1)
+        tcb->dma_flags = NVMMU_TCB_DMA_TO_DEVICE;
+    else
+        tcb->dma_flags = NVMMU_TCB_DMA_FROM_DEVICE;
+    tcb->slot_id = tag;
+    tcb->len = queue_cmd->cdw12;
+    tcb->prp1 = queue_cmd->prp1;
+    tcb->prp2 = queue_cmd->prp2;
+
+    if (++q->sq_tail == nvme_queue_depth(q))
+        q->sq_tail = 0;
+
+    /* make sure ANS2 can see the command and tcb before triggering it */
+    dma_wmb();
+
+    if (q->adminq)
+        write32(nvme_base + NVME_DB_ASQ, q->sq_tail);
+    else
+        write32(nvme_base + NVME_DB_IOSQ, q->sq_tail);
+
+    return tag;
+}
+
+/*
  * Submit command using Linear SQ and IOMMU
  * Returns: Expected tag in CQ
  */
@@ -312,7 +399,9 @@ static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, u6
     u64 timeout;
     u8 cq_tag;
 
-    if (nvme_type < NVME_T8103)
+    if (nvme_type == NVME_T8020)
+        cq_tag = nvme_submit_command_t8020(q, cmd);
+    else if (nvme_type < NVME_T8103)
         cq_tag = nvme_submit_command_t8015(q, cmd);
     else
         cq_tag = nvme_submit_command_t8103(q, cmd);
@@ -338,15 +427,17 @@ static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, u6
             printf("nvme: invalid tag in CQ: expected %d but got %d\n", cq_tag, cqe.tag);
         }
 
-        if (nvme_type >= NVME_T8103) {
+        if (nvme_has_nvmmu()) {
+            u32 stat = nvme_type == NVME_T8020 ? NVMMU_TCB_STAT_T8020 : NVMMU_TCB_STAT;
+
             write32(nvmmu_base + NVMMU_TCB_INVAL, cqe.tag);
-            if (read32(nvmmu_base + NVMMU_TCB_STAT))
+            if (read32(nvmmu_base + stat))
                 printf("nvme: NVMMU invalidation for tag %d failed\n", cqe.tag);
         }
 
         /* increment head and switch phase once the end of the queue has been reached */
         q->cq_head += 1;
-        if (q->cq_head == nvme_queue_size) {
+        if (q->cq_head == nvme_queue_depth(q)) {
             q->cq_head = 0;
             q->cq_phase ^= 1;
         }
@@ -389,6 +480,8 @@ bool nvme_init(void)
     if (adt_is_compatible(adt, node, "iop-ans2,t8015"))
         // A11 has NVMe with normal submission queues and 16 tags.
         nvme_type = NVME_T8015;
+    else if (chip_id == T8020)
+        nvme_type = NVME_T8020;
     else if (adt_get_property(adt, node, "nvme-secure-bar"))
         // M4+ generations have the nvme-secure-bar property and 10+ regs.
         // They use reg[3] for NVMMU registers and reg[9] for NVMe registers,
@@ -446,6 +539,32 @@ bool nvme_init(void)
     if (!nvme_rtkit)
         goto out_sart;
 
+    u32 cc = 0;
+    if (nvme_type == NVME_T8020) {
+        /*
+         * The SART is all that stands between ANS and memory here, so the
+         * queues and the translation blocks need entries of their own.
+         */
+        if (!nvme_sart_allow(&adminq) || !nvme_sart_allow(&ioq)) {
+            printf("nvme: no SART entries for the queues\n");
+            goto out_rtkit;
+        }
+
+        /*
+         * iBoot leaves its own admin queue in these registers and the
+         * firmware fetches from it as soon as it runs. Point them at ours,
+         * still empty, before it starts.
+         */
+        cc = read32(nvme_base + NVME_CC) & ~(NVME_CC_EN | NVME_CC_SHN);
+        if (!(cc & NVME_CC_IOSQES))
+            cc |= FIELD_PREP(NVME_CC_IOSQES, 6) | FIELD_PREP(NVME_CC_IOCQES, 4);
+        write32(nvme_base + NVME_CC, 0);
+        write32(nvme_base + NVME_AQA,
+                ((NVME_AQ_DEPTH_T8020 - 1) << 16) | (NVME_AQ_DEPTH_T8020 - 1));
+        write64_lo_hi(nvme_base + NVME_ASQ, (u64)adminq.cmds);
+        write64_lo_hi(nvme_base + NVME_ACQ, (u64)adminq.cqes);
+    }
+
     if (!rtkit_boot(nvme_rtkit))
         goto out_rtkit;
 
@@ -464,14 +583,25 @@ bool nvme_init(void)
         write64_lo_hi(nvmmu_base + NVMMU_IOSQ_BASE, (u64)ioq.tcbs);
     }
 
+    if (nvme_type == NVME_T8020) {
+        /* the NVMMU covers the whole tag space, the queues are rings */
+        write32(nvme_base + NVME_MAX_PEND_CMDS_CTRL, (nvme_queue_size << 16) | nvme_queue_size);
+        write32(nvmmu_base + NVMMU_NUM, NVME_TCBS_T8020 - 1);
+        write64_lo_hi(nvmmu_base + NVMMU_ASQ_BASE, (u64)adminq.tcbs);
+        write64_lo_hi(nvmmu_base + NVMMU_IOSQ_BASE, (u64)ioq.tcbs);
+    }
+
     /* setup admin queue */
     if (!nvme_ctrl_disable()) {
         printf("nvme: timeout while waiting for CSTS.RDY to clear\n");
         goto out_shutdown;
     }
+    u32 aq_depth = nvme_queue_depth(&adminq);
     write64_lo_hi(nvme_base + NVME_ASQ, (u64)adminq.cmds);
     write64_lo_hi(nvme_base + NVME_ACQ, (u64)adminq.cqes);
-    write32(nvme_base + NVME_AQA, ((nvme_queue_size - 1) << 16) | (nvme_queue_size - 1));
+    write32(nvme_base + NVME_AQA, ((aq_depth - 1) << 16) | (aq_depth - 1));
+    if (nvme_type == NVME_T8020)
+        write32(nvme_base + NVME_CC, cc);
     if (!nvme_ctrl_enable()) {
         printf("nvme: timeout while waiting for CSTS.RDY to be set\n");
         goto out_disable_ctrl;
@@ -479,6 +609,21 @@ bool nvme_init(void)
 
     /* setup IO queue */
     struct nvme_command cmd;
+
+    if (nvme_type == NVME_T8020) {
+        /*
+         * The A12's firmware answers Create IO CQ with an invalid field
+         * while nothing has asked for a queue yet.
+         */
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.opcode = NVME_ADMIN_CMD_SET_FEATURES;
+        cmd.cdw10 = NVME_FEATURE_NUM_QUEUES;
+        cmd.cdw11 = 0; // one submission and one completion queue, zero-based
+        if (!nvme_exec_command(&adminq, &cmd, NULL)) {
+            printf("nvme: set queue count command failed\n");
+            goto out_disable_ctrl;
+        }
+    }
 
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_CMD_CREATE_CQ;
@@ -490,6 +635,13 @@ bool nvme_init(void)
         printf("nvme: create cq command failed\n");
         goto out_disable_ctrl;
     }
+    /*
+     * The A12's firmware takes the IO queues' bases in these registers as
+     * well, each written after its command; Create IO SQ fails while the
+     * completion queue's is not set.
+     */
+    if (nvme_type == NVME_T8020)
+        write64_lo_hi(nvme_base + NVME_IOQ_CQES, (u64)ioq.cqes);
 
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_CMD_CREATE_SQ;
@@ -502,6 +654,8 @@ bool nvme_init(void)
         printf("nvme: create sq command failed\n");
         goto out_delete_cq;
     }
+    if (nvme_type == NVME_T8020)
+        write64_lo_hi(nvme_base + NVME_IOQ_CMDS, (u64)ioq.cmds);
 
     if (nvme_type == NVME_T8132) {
         // Extra write required to set up the IO queues on M4+.

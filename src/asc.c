@@ -206,6 +206,14 @@ asc_dev_t *asc_init(const char *path)
             printf("asc: Error getting T8015 ANS2 %s CPU base address.\n", path);
             return NULL;
         }
+    } else if (adt_is_compatible(adt, node, "iop,ascwrap-v2")) {
+        /*
+         * The A12: the coprocessor's control register sits in the ASC
+         * wrapper, as on the M1, while the mailbox is the A11's.
+         */
+        asc->cpu_base = base;
+        asc->base = base + 0x8000;
+        asc->ops = &t8015_ans2_ops;
     } else if (adt_is_compatible(adt, node, "iop,ascwrap-v4") ||
                adt_is_compatible(adt, node, "iop-sep,ascwrap-v4")) {
         asc->cpu_base = base;
