@@ -124,7 +124,7 @@ static void smp_start_cpu(int index, int die, int cluster, int core, u64 impl, u
     if (spin_table[index].flag)
         return;
 
-    if (chip_id == T8030) {
+    if (chip_id == T8020 || chip_id == T8030) {
         /*
          * A13 runs with features_unknown (no A12/A13 entry in midr_parts[]),
          * so the generic path below would leave RVBAR alone. IORVBAR is MMIO,
@@ -302,6 +302,7 @@ void smp_start_secondaries(void)
         case T8011:
         case T8012:
         case T8015:
+        case T8020: // A12: PMGR CPU start layout exposed by function-enable_core
         case T8030: // A13: PMGR CPU start at 0xd4004/0xd4008 as on A11
             cpu_start_off = CPU_START_OFF_S8000;
             break;

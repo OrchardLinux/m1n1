@@ -150,6 +150,8 @@ const struct midr_part_info midr_parts[] = {
      &features_a10},
     {MIDR_PART_T8015_MONSOON, "A11 Monsoon", init_t8015_monsoon, &features_a11},
     {MIDR_PART_T8015_MISTRAL, "A11 Mistral", init_t8015_mistral, &features_a11},
+    {MIDR_PART_T8020_VORTEX, "A12 Vortex", NULL, &features_a13},
+    {MIDR_PART_T8020_TEMPSET, "A12 Tempest", NULL, &features_a13},
     {MIDR_PART_T8030_LIGHTNING, "A13 Lightning", NULL, &features_a13},
     {MIDR_PART_T8030_THUNDER, "A13 Thunder", NULL, &features_a13},
     {MIDR_PART_T8103_FIRESTORM, "M1 Firestorm", init_t8103_firestorm, &features_m1},

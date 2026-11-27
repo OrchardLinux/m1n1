@@ -3277,7 +3277,7 @@ int kboot_prepare_dt(void *fdt)
 
     /* A13 (chip 0x8030) uses features_unknown, whose false apple_sysregs_unlocked
      * does NOT imply the M4-only CTRR registers exist; they trap at EL1 on N104. */
-    if (chip_id != 0x8030 && !cpu_features->apple_sysregs_unlocked) {
+    if (chip_id != 0x8020 && chip_id != 0x8030 && !cpu_features->apple_sysregs_unlocked) {
         // On M4* / A18 Pro / M5*, there is a CTRR instance left enabled only
         // on the secondary (non-boot) cores. Add a reserved-memory region to
         // prevent Linux from crashing when allocating this memory and writing
@@ -3288,8 +3288,8 @@ int kboot_prepare_dt(void *fdt)
             printf("WARNING: M4+ SMP-RO is large (48KB)");
         if (fdt_add_mem_rsv(dt, ro_start, ro_end - ro_start))
             bail("FDT: couldn't add reservation for M4+ SMP-RO CTRR area\n");
-    } else if (chip_id == 0x8030) {
-        printf("FDT: skipping M4-only CTRR reservation on A13\n");
+    } else if (chip_id == 0x8020 || chip_id == 0x8030) {
+        printf("FDT: skipping M4-only CTRR reservation on A12/A13\n");
     }
 
     /* setup console log buffer early to capture as much log as possible */
