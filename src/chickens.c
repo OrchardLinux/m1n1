@@ -15,6 +15,8 @@ void init_t8010_2_hurricane_zephyr(int rev);
 void init_t8011_hurricane_zephyr(int rev);
 void init_t8015_monsoon(int rev);
 void init_t8015_mistral(int rev);
+void init_t8020_vortex(int rev);
+void init_t8020_tempest(int rev);
 void init_t8015_monsoon(int rev);
 void init_m1_icestorm(int rev);
 void init_t8103_firestorm(int rev);
@@ -77,6 +79,21 @@ const struct midr_part_features features_a13 = {
     .apple_sysregs_unlocked = true,
     .fast_ipi = true,
     .sleep_mode = SLEEP_NONE,
+};
+
+/*
+ * A12 uses the A11-era uncore and cluster sleep machinery, but DC by-VA
+ * operations must remain enabled for its non-coherent DMA masters.  The
+ * A13 bring-up profile is intentionally much smaller and is not sufficient
+ * for Vortex/Tempest.
+ */
+const struct midr_part_features features_a12 = {
+    .acc_cfg = true,
+    .apple_sysregs_unlocked = true,
+    .sleep_mode = SLEEP_CLUSTER,
+    .uncore_version = UNCORE_V1,
+    .nex_powergating = true,
+    .fast_ipi = true,
 };
 
 const struct midr_part_features features_m1 = {
@@ -150,8 +167,8 @@ const struct midr_part_info midr_parts[] = {
      &features_a10},
     {MIDR_PART_T8015_MONSOON, "A11 Monsoon", init_t8015_monsoon, &features_a11},
     {MIDR_PART_T8015_MISTRAL, "A11 Mistral", init_t8015_mistral, &features_a11},
-    {MIDR_PART_T8020_VORTEX, "A12 Vortex", NULL, &features_a13},
-    {MIDR_PART_T8020_TEMPSET, "A12 Tempest", NULL, &features_a13},
+    {MIDR_PART_T8020_VORTEX, "A12 Vortex", init_t8020_vortex, &features_a12},
+    {MIDR_PART_T8020_TEMPSET, "A12 Tempest", init_t8020_tempest, &features_a12},
     {MIDR_PART_T8030_LIGHTNING, "A13 Lightning", NULL, &features_a13},
     {MIDR_PART_T8030_THUNDER, "A13 Thunder", NULL, &features_a13},
     {MIDR_PART_T8103_FIRESTORM, "M1 Firestorm", init_t8103_firestorm, &features_m1},
