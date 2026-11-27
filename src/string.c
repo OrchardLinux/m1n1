@@ -231,3 +231,15 @@ long atol(const char *s)
 
     return val;
 }
+
+// Rust's core links against it from 1.99 on
+size_t wcslen(const unsigned int *s)
+{
+    size_t rc = 0;
+
+    while (s[rc]) {
+        ++rc;
+    }
+
+    return rc;
+}
