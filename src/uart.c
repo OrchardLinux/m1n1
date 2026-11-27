@@ -13,6 +13,7 @@
 #define UART_CLOCK 24000000
 
 static u64 uart_base = 0;
+static u32 ucon_from_iboot;
 
 int uart_init(void)
 {
@@ -36,7 +37,21 @@ int uart_init(void)
         return -1;
     }
 
+    /* A production iPhone's iBoot leaves the receiver off: turn it on (polled),
+       or the proxy never hears the host. */
+    ucon_from_iboot = read32(uart_base + UCON);
+    if (FIELD_GET(UCON_RXMODE, ucon_from_iboot) == UCON_MODE_OFF)
+        write32(uart_base + UCON, (ucon_from_iboot & ~UCON_RXMODE) |
+                                      FIELD_PREP(UCON_RXMODE, UCON_MODE_IRQ));
+
     return 0;
+}
+
+void uart_show_rx(void)
+{
+    if (uart_base)
+        printf("UART: @0x%lx UCON 0x%x -> 0x%x, UFCON 0x%x\n", uart_base, ucon_from_iboot,
+               read32(uart_base + UCON), read32(uart_base + UFCON));
 }
 
 void uart_putbyte(u8 c)

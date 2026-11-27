@@ -200,6 +200,7 @@ void _start_c(void *boot_args, void *base)
     dockchannel_uart_init();
 
     uart_puts("Initializing");
+    uart_show_rx();
     get_device_info();
 
     printf("CPU init (MIDR: 0x%lx smp_id:0x%x)...\n", mrs(MIDR_EL1), smp_id());

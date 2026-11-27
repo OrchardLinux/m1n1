@@ -6,6 +6,7 @@
 #include "types.h"
 
 int uart_init(void);
+void uart_show_rx(void);
 
 void uart_putbyte(u8 c);
 u8 uart_getbyte(void);
