@@ -1,0 +1,46 @@
+# Orchard's rules for its loader changes. They were tests in OrchardLinux/orchard
+# while m1n1 was carried there as patch files.
+name: Orchard checks
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  loader-rules:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Linux's apple_z2 driver reads the per-unit proximity calibration from
+      # this property; without the mapping the touchscreen loses it silently.
+      - name: The touch proximity calibration is forwarded
+        run: |
+          grep -qF '{"prox-calibration", "apple,z2-prox-cal-blob"}' src/kboot.c || {
+            echo '::error file=src/kboot.c::kboot no longer forwards prox-calibration as apple,z2-prox-cal-blob'
+            exit 1
+          }
+
+      # Board data comes from the ADT and the device tree's aliases, never from
+      # a board's compatible, so one m1n1 serves every board. Code taken over
+      # from another tree is exempt: label the pull request "import".
+      - name: New loader code names no board
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'import')
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          added=$(git diff --unified=0 "$BASE"...HEAD -- src ':!src/libfdt' |
+                  grep -E '^\+[^+]' | grep -E 'check_compatible|cal_len !=' || true)
+          if [[ -n $added ]]; then
+            echo '::error::New code selects by board compatible or by a fixed calibration length; take the data from the ADT instead'
+            printf '%s\n' "$added"
+            exit 1
+          fi
