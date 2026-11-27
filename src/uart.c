@@ -41,8 +41,8 @@ int uart_init(void)
        or the proxy never hears the host. */
     ucon_from_iboot = read32(uart_base + UCON);
     if (FIELD_GET(UCON_RXMODE, ucon_from_iboot) == UCON_MODE_OFF)
-        write32(uart_base + UCON, (ucon_from_iboot & ~UCON_RXMODE) |
-                                      FIELD_PREP(UCON_RXMODE, UCON_MODE_IRQ));
+        write32(uart_base + UCON,
+                (ucon_from_iboot & ~UCON_RXMODE) | FIELD_PREP(UCON_RXMODE, UCON_MODE_IRQ));
 
     return 0;
 }

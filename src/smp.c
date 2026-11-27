@@ -137,7 +137,7 @@ static void smp_start_cpu(int index, int die, int cluster, int core, u64 impl, u
         printf("RVBAR @0x%lx: 0x%lx -> 0x%lx (vectors 0x%lx)\n", impl, rvbar, read64(impl),
                (u64)_vectors_start);
     } else if (!cpu_features->apple_sysregs_unlocked &&
-        (read64(impl) & RVBAR_ADDR) != (u64)_vectors_start) {
+               (read64(impl) & RVBAR_ADDR) != (u64)_vectors_start) {
         printf("Failed! \n    RVBAR (=0x%lx) is locked and differs from entry point (=0x%lx)\n",
                read64(impl) & RVBAR_ADDR, (u64)_vectors_start);
     }

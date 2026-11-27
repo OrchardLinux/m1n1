@@ -601,11 +601,11 @@ const struct feat_t *cpufreq_get_features(void)
  * software, as AppleT8020PMGR does, and Linux then sets the CPU rails on
  * every switch. Each rail keeps its current code.
  */
-#define T8020_VOLTAGE_CTL      0xa0000
-#define T8020_VOLTAGE_CTL_HW   GENMASK(14, 8)
-#define T8020_VOLTAGE_RAIL(n)  (0xa000c + 4 * (n))
-#define T8020_VOLTAGE_RAILS    7
-#define T8020_VOLTAGE_BUSY     BIT(31)
+#define T8020_VOLTAGE_CTL     0xa0000
+#define T8020_VOLTAGE_CTL_HW  GENMASK(14, 8)
+#define T8020_VOLTAGE_RAIL(n) (0xa000c + 4 * (n))
+#define T8020_VOLTAGE_RAILS   7
+#define T8020_VOLTAGE_BUSY    BIT(31)
 
 static int cpufreq_init_t8020(void)
 {

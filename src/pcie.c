@@ -560,8 +560,7 @@ static int pcie_init_controller(int controller, const char *path)
         }
 
         if (adt_getprop(adt, adt_offset, "apcie-phy-ip-tunables", NULL)) {
-            if (tunables_apply_local_addr(path, "apcie-phy-ip-tunables",
-                                          state->phy_ip_base[phy])) {
+            if (tunables_apply_local_addr(path, "apcie-phy-ip-tunables", state->phy_ip_base[phy])) {
                 printf("pcie: Error applying apcie-phy-ip-tunables for %s\n", path);
                 return -1;
             }

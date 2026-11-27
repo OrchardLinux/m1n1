@@ -169,8 +169,7 @@ static int usb_drd_get_regs(u32 idx, struct usb_drd_regs *regs)
         return -1;
     }
     /* the pipehandler (reg 3) is the Type-C port's; the AUSB port has none */
-    if (!regs->ausb &&
-        adt_get_reg(adt, adt_drd_path, "reg", 3, &regs->drd_regs_unk3, NULL) < 0) {
+    if (!regs->ausb && adt_get_reg(adt, adt_drd_path, "reg", 3, &regs->drd_regs_unk3, NULL) < 0) {
         printf("usb: Error getting reg with index 3 for %s.\n", drd_path);
         return -1;
     }
@@ -597,8 +596,8 @@ int usb_complex_init_adt(void)
         }
     }
 
-    printf("usb: complex=%p phy=%p dwc2=%p cfg0=%08x cfg1=%08x type=%d\n",
-           (void *)USBComplexBase, (void *)USB2Phy_Base, (void *)DWC2Base, cfg0, cfg1, type);
+    printf("usb: complex=%p phy=%p dwc2=%p cfg0=%08x cfg1=%08x type=%d\n", (void *)USBComplexBase,
+           (void *)USB2Phy_Base, (void *)DWC2Base, cfg0, cfg1, type);
 
     struct usb_complex_config config = {
         .USBComplexBase = USBComplexBase,

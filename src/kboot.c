@@ -2786,8 +2786,7 @@ static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix
 
         /* Numbered (usb-drd0, usb-drd1, ...) or a single unnumbered node: the
            A13 ADT (N104) has just "usb-drd" */
-        if (name[adt_prefix_len] &&
-            (name[adt_prefix_len] < '0' || name[adt_prefix_len] > '9'))
+        if (name[adt_prefix_len] && (name[adt_prefix_len] < '0' || name[adt_prefix_len] > '9'))
             continue;
 
         path[pp] = node;
@@ -3083,8 +3082,8 @@ static void kboot_append_iboot_ramdisk(void)
         return;
     if (rd[0] >= cur_boot_args.virt_base)
         rd[0] = rd[0] - cur_boot_args.virt_base + cur_boot_args.phys_base;
-    printf("kboot: iBoot ramdisk at 0x%lx, 0x%lx bytes (top of kernel data 0x%lx)\n", rd[0],
-           rd[1], cur_boot_args.top_of_kernel_data);
+    printf("kboot: iBoot ramdisk at 0x%lx, 0x%lx bytes (top of kernel data 0x%lx)\n", rd[0], rd[1],
+           cur_boot_args.top_of_kernel_data);
 
     const u8 *src = (const u8 *)rd[0];
     if (src[0] != 0x1f || src[1] != 0x8b) {

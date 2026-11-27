@@ -321,11 +321,11 @@
 #define EHID9_DEV_2_THROTTLE_LIMIT_MASK GENMASK(11, 6)
 #define EHID9_DEV_2_THROTTLE_LIMIT(x)   ((ULONG(x)) << 6)
 
-#define SYS_IMP_APL_HID10               sys_reg(3, 0, 15, 10, 0)
-#define SYS_IMP_APL_EHID10              sys_reg(3, 0, 15, 10, 1)
+#define SYS_IMP_APL_HID10                   sys_reg(3, 0, 15, 10, 0)
+#define SYS_IMP_APL_EHID10                  sys_reg(3, 0, 15, 10, 1)
 #define EHID10_RCC_DIS_PWR_SAVE_PRF_CLK_OFF BIT(19)
-#define HID10_FORCE_WAIT_STATE_DRAIN_UC BIT(32)
-#define HID10_DISABLE_ZVA_TEMPORAL_TSO  BIT(49)
+#define HID10_FORCE_WAIT_STATE_DRAIN_UC     BIT(32)
+#define HID10_DISABLE_ZVA_TEMPORAL_TSO      BIT(49)
 
 #define SYS_IMP_APL_HID11             sys_reg(3, 0, 15, 11, 0)
 #define SYS_IMP_APL_HID11_LEGACY      sys_reg(3, 0, 15, 13, 0) /* A7-A9 */
