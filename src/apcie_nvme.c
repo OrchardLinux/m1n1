@@ -98,7 +98,7 @@
 #define S8003_PORT0_SPEED         2   /* 5 GT/s */
 #define S8003_LINK_TRIES          2
 #define LINK_TIMEOUT              (-2)
-#define CFG_BUS_SHIFT 20
+#define CFG_BUS_SHIFT             20
 
 #define NVMMU_TCB_CTRL      0x0004
 #define NVMMU_TCB_CTRL_INIT BIT(16)
@@ -297,7 +297,7 @@ struct apcie_soc {
     u32 l1ss_ctl1;
     u32 nvmmu_init_busy;
     bool nvmmu_inv_fifo;
-    u32 gpio_mask;  /* GPIO function and output mode, as Linux/iOS set it */
+    u32 gpio_mask; /* GPIO function and output mode, as Linux/iOS set it */
     u32 gpio_value;
     /* S8000/S8003: phy-ip window with the driver's lane init, and tunables */
     bool has_phy_ip;
@@ -474,8 +474,8 @@ static int read_adt(void)
         get_reg(APCIE_PATH, APCIE_REG_RC, &rc_base, NULL) < 0 ||
         get_reg(APCIE_PATH, APCIE_REG_PHY, &phy_base, NULL) < 0 ||
         (soc->has_phy_ip && get_reg(APCIE_PATH, APCIE_REG_PHY_IP, &phy_ip_base, NULL) < 0) ||
-        get_reg(DART_PATH, 0, &dart_base, NULL) < 0 || get_reg(GPIO_PATH, 0, &gpio_base, NULL) < 0 ||
-        get_gpio("function-perst", &perst_pin) < 0 ||
+        get_reg(DART_PATH, 0, &dart_base, NULL) < 0 ||
+        get_reg(GPIO_PATH, 0, &gpio_base, NULL) < 0 || get_gpio("function-perst", &perst_pin) < 0 ||
         (soc->setup_link == t8010_setup_link && get_gpio("function-clkreq", &clkreq_pin) < 0)) {
         printf("apcie-nvme: incomplete ADT\n");
         return -1;
@@ -963,8 +963,10 @@ static int setup_dart(void)
         write32(dart_base + DART_FETCH_CONFIG, fetch);
     if (diag)
         write32(dart_base + DART_DIAG_CONFIG, diag);
-    write32(dart_base + DART_STREAM_COMMAND, DART_STREAM_COMMAND_SELECT0 | DART_STREAM_COMMAND_INVAL);
-    if (wait32(dart_base + DART_STREAM_COMMAND, DART_STREAM_COMMAND_BUSY, 0, 100000, "DART invalidate"))
+    write32(dart_base + DART_STREAM_COMMAND,
+            DART_STREAM_COMMAND_SELECT0 | DART_STREAM_COMMAND_INVAL);
+    if (wait32(dart_base + DART_STREAM_COMMAND, DART_STREAM_COMMAND_BUSY, 0, 100000,
+               "DART invalidate"))
         return -1;
     write32(dart_base + DART_ERROR, read32(dart_base + DART_ERROR));
     return 0;
@@ -1085,7 +1087,8 @@ static int enable_controller(void)
     doorbell_stride = 4 << ((cap >> 32) & 0xf);
 
     write32(BAR_CPU + NVME_CC, 0);
-    if (wait32(BAR_CPU + NVME_CSTS, NVME_CSTS_RDY | NVME_CSTS_CFS, 0, 2000000, "controller disable"))
+    if (wait32(BAR_CPU + NVME_CSTS, NVME_CSTS_RDY | NVME_CSTS_CFS, 0, 2000000,
+               "controller disable"))
         return -1;
     for (u32 tag = 0; tag < NVMMU_MAX_REQS; tag++)
         tcb_retire(tag);
@@ -1269,8 +1272,7 @@ bool apcie_nvme_init(void)
     powered = true;
 
     if (soc->setup_common() || soc->setup_link() || setup_endpoint() || setup_nvmmu() ||
-        enable_controller() ||
-        create_io_queues()) {
+        enable_controller() || create_io_queues()) {
         apcie_nvme_shutdown();
         return false;
     }

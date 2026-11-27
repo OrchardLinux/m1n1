@@ -30,7 +30,7 @@ static const u8 fdt_magic[] = {0xd0, 0x0d, 0xfe, 0xed};
 static const u8 kernel_magic[] = {0x18, 0x28, 0x6f, 0x01}; // a zImage
 #define KERNEL_MAGIC_OFFSET 0x24
 #else
-static const u8 kernel_magic[] = {'A', 'R', 'M', 0x64};          // at 0x38
+static const u8 kernel_magic[] = {'A', 'R', 'M', 0x64}; // at 0x38
 #define KERNEL_MAGIC_OFFSET 0x38
 #endif
 static const u8 cpio_magic[] = {'0', '7', '0', '7', '0'};        // '1' or '2' next

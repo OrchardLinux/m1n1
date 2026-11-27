@@ -55,9 +55,9 @@ typedef s64 ssize_t;
 #define SZ_32M (1 << 25)
 
 #ifdef __arm__
-#define BIT(x)                 (1ULL << (x))
+#define BIT(x) (1ULL << (x))
 #else
-#define BIT(x)                 (1UL << (x))
+#define BIT(x) (1UL << (x))
 #endif
 #define MASK(x)                (BIT(x) - 1)
 #define GENMASK(msb, lsb)      ((BIT((msb + 1) - (lsb)) - 1) << (lsb))

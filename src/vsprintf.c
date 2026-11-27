@@ -100,7 +100,7 @@
 #define VA_START(ap, last)        va_start(ap, last)
 #define VA_SHIFT(ap, value, type) /* No-op for ANSI C. */
 
-#define ULLONG    unsigned long long
+#define ULLONG unsigned long long
 #ifdef __arm__
 /*
  * 32-bit build. m1n1 prints its u64 values with %lx, so %l reads 64 bits
