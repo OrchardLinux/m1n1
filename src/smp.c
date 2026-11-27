@@ -124,7 +124,19 @@ static void smp_start_cpu(int index, int die, int cluster, int core, u64 impl, u
     if (spin_table[index].flag)
         return;
 
-    if (!cpu_features->apple_sysregs_unlocked &&
+    if (chip_id == T8030) {
+        /*
+         * A13 runs with features_unknown (no A12/A13 entry in midr_parts[]),
+         * so the generic path below would leave RVBAR alone. IORVBAR is MMIO,
+         * writable from EL1 as long as iBoot did not lock it: point it at our
+         * vectors if it is unlocked, and say what we found either way.
+         */
+        u64 rvbar = read64(impl);
+        if (!(rvbar & RVBAR_LOCK))
+            write64(impl, (u64)_vectors_start);
+        printf("RVBAR @0x%lx: 0x%lx -> 0x%lx (vectors 0x%lx)\n", impl, rvbar, read64(impl),
+               (u64)_vectors_start);
+    } else if (!cpu_features->apple_sysregs_unlocked &&
         (read64(impl) & RVBAR_ADDR) != (u64)_vectors_start) {
         printf("Failed! \n    RVBAR (=0x%lx) is locked and differs from entry point (=0x%lx)\n",
                read64(impl) & RVBAR_ADDR, (u64)_vectors_start);
@@ -290,6 +302,7 @@ void smp_start_secondaries(void)
         case T8011:
         case T8012:
         case T8015:
+        case T8030: // A13: PMGR CPU start at 0xd4004/0xd4008 as on A11
             cpu_start_off = CPU_START_OFF_S8000;
             break;
         case T8103:
