@@ -912,9 +912,33 @@ static void usb_dwc2_ep0_handle_setup(dwc2_dev_t *dev)
     }
 }
 
+#define T8020_DMA_CACHE_LINE 64
+
+static void usb_dwc2_dma_invalidate(void *addr, size_t len)
+{
+    u64 start = (u64)addr & ~(u64)(T8020_DMA_CACHE_LINE - 1);
+    u64 end = (u64)addr + len;
+
+    for (u64 q = start; q < end; q += T8020_DMA_CACHE_LINE)
+        dc_ivac((void *)q);
+    sysop("dsb sy");
+}
+
+static void usb_dwc2_dma_clean(void *addr, size_t len)
+{
+    u64 start = (u64)addr & ~(u64)(T8020_DMA_CACHE_LINE - 1);
+    u64 end = (u64)addr + len;
+
+    for (u64 q = start; q < end; q += T8020_DMA_CACHE_LINE)
+        dc_cvac((void *)q);
+    sysop("dsb sy");
+}
+
 void usb_dwc2_handle_events(dwc2_dev_t *dev)
 {
-    // usb_debug_printf("------checking int-----\n");
+    // T8020's USB DMA path is not cache coherent.
+    if (chip_id == T8020)
+        usb_dwc2_dma_invalidate(dev->dma_page_p, max(DMA_BUFFER_SIZE * MAX_ENDPOINTS, SZ_16K));
     usb_dwc2_handle_interrupts(dev);
     usb_dwc2_cdc_bulk_out_poll(dev, USB_LEP_CDC_BULK_OUT);
     usb_dwc2_cdc_bulk_out_poll(dev, USB_LEP_CDC_BULK_OUT_2);
@@ -1304,6 +1328,9 @@ static void usb_dwc2_ep_hw_send(dwc2_dev_t *dev, u8 ep, u32 hw_xfer_size, u32 pa
     }
 
     dma_rmb();
+    // The controller does not snoop CPU caches on T8020.
+    if (chip_id == T8020)
+        usb_dwc2_dma_clean(dev->endpoints[ep].xfer_buffer, hw_xfer_size);
     write32(dev->regs + DWC2_DIEPDMA(pep), (uintptr_t)dev->endpoints[ep].xfer_buffer);
     write32(dev->regs + DWC2_DIEPTSIZ(pep), (packet_count << 19) | hw_xfer_size);
     set32(dev->regs + DWC2_DIEPCTL(pep), DWC2_DXEPCTLi_EnableEP | DWC2_DXEPCTL_ClearNAK);
@@ -1526,7 +1553,8 @@ dwc2_dev_t *usb_dwc2_init(u64 regs)
         case 0b00: /* No HS */
             return NULL;
         case 0b01: /* UTMI+ */
-            if (gusbcfg & DWC2_GUSBCFG_PHYIF16) {
+            // T8020 uses a 16-bit UTMI+ interface.
+            if (chip_id == T8020 || (gusbcfg & DWC2_GUSBCFG_PHYIF16)) {
                 gusbcfg = DWC2_GUSBCFG_PHYIF16 | FIELD_PREP(GUSBCFG_USBTRDTIM_MASK, 5);
                 break;
             }
