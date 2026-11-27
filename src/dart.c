@@ -119,6 +119,7 @@ struct dart_dev {
     u64 vm_base;
 
     u64 *l1[DART_MAX_TTBR_COUNT];
+    uintptr_t mirror; /* a second instance walking the same tables (dart_mirror) */
 };
 
 static void dart_t8020_tlb_invalidate(dart_dev_t *dart)
@@ -131,6 +132,14 @@ static void dart_t8020_tlb_invalidate(dart_dev_t *dart)
 
     if (poll32(dart->regs + DART_T8020_STREAM_COMMAND, DART_T8020_STREAM_COMMAND_BUSY, 0, 100))
         printf("dart: DART_T8020_STREAM_COMMAND_BUSY did not clear.\n");
+
+    if (dart->mirror) {
+        write32(dart->mirror + DART_T8020_STREAM_SELECT, BIT(dart->device));
+        write32(dart->mirror + DART_T8020_STREAM_COMMAND, DART_T8020_STREAM_COMMAND_INVALIDATE);
+        if (poll32(dart->mirror + DART_T8020_STREAM_COMMAND, DART_T8020_STREAM_COMMAND_BUSY, 0,
+                   100))
+            printf("dart: mirror STREAM_COMMAND_BUSY did not clear.\n");
+    }
 }
 
 static void dart_t8110_tlb_invalidate(dart_dev_t *dart)
@@ -272,6 +281,26 @@ error:
         free(dart->l1);
     free(dart);
     return NULL;
+}
+
+/*
+ * Point a second DART instance of the same type at this one's page tables for
+ * the same stream, so a master behind both (the A13's USB: TRADDARTLLT and
+ * TRADDARTBLK) sees one address space, as Linux sets it up. Cascadia
+ * downstream.
+ */
+void dart_mirror(dart_dev_t *dart, uintptr_t base)
+{
+    dart_dev_t copy = *dart;
+    dart_dev_t *other = &copy;
+
+    other->regs = base;
+    other->mirror = 0;
+    for (int i = 0; i < dart->params->ttbr_count; i++)
+        write32(DART_TTBR(other, i), read32(DART_TTBR(dart, i)));
+    write32(DART_TCR(other), read32(DART_TCR(dart)));
+    dart->mirror = base;
+    dart->params->tlb_invalidate(dart);
 }
 
 dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_pts)
