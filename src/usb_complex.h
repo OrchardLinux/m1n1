@@ -95,6 +95,7 @@ enum usb_complex_type {
     USBCOMPLEX_S5L8960X,
     USBCOMPLEX_T8011,
     USBCOMPLEX_T8015,
+    USBCOMPLEX_T8020,
 };
 
 struct usb_complex_config {
