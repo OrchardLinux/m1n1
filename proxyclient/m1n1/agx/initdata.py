@@ -13,8 +13,26 @@ def build_iomappings(agx, chip_id):
         agx.uat.iomap_at(0, virt, phys - off, size + off, AttrIndex=MemoryAttr.Device)
         return IOMapping(phys, virt + off, size, range_size, rw)
 
+    # t8030 (A13): what iOS 16.4 gives its GPU firmware (HwDataB.io_mappings),
+    # in t8103's slots (Cascadia, a13/docs/research/gpu.md)
+    if chip_id == 0x8030:
+        return [
+            iomap(0x204d00000, 0x20000, 0x20000, 1), # Fender
+            iomap(0x20e100000, 0x4000, 0x4000, 0), # AICTimer
+            iomap(0x23b104000, 0x4000, 0x4000, 1), # AICSWInt
+            iomap(0x204000000, 0x20000, 0x20000, 1), # RGX
+            IOMapping(), # UVD
+            IOMapping(), # unused
+            IOMapping(), # DisplayUnderrunWA
+            iomap(0x23b2ec000, 0x1000, 0x1000, 0), # AnalogTempSensorControllerRegs
+            iomap(0x23bc34000, 0x1000, 0x1000, 1), # PMPDoorbell
+            iomap(0x204d80000, 0x5000, 0x5000, 1), # MetrologySensorRegs
+            iomap(0x204d71000, 0x1000, 0x1000, 1), # GMGIFAFRegs
+            iomap(0x200000000, 0xd6400, 0xd6400, 1), # MCache registers
+            iomap(0x23b102000, 0x1000, 0x1000, 0), # AICBankedRegisters
+        ] + [IOMapping() for i in range(11)]
     # for t8103
-    if chip_id == 0x8103:
+    elif chip_id == 0x8103:
         return [
             iomap(0x204d00000, 0x1c000, 0x1c000, 1), # Fender
             iomap(0x20e100000, 0x4000, 0x4000, 0), # AICTimer
@@ -125,6 +143,53 @@ def build_iomappings(agx, chip_id):
         ]
 
 CHIP_INFO = {
+    # t8030 (A13, G12): read back from what iOS 16.4 gives its GPU firmware
+    # (HwDataA/B, RegionC; Cascadia a13/tools/gpu/chipinfo.py)
+    0x8030: Container(
+        chip_id = 0x8030,
+        min_sram_volt = 753,
+        max_power = 9220,
+        max_freq_mhz = 1194,
+        unk_87c = 0,
+        unk_8cc = 10000,
+        unk_924 = [[0] * 8] * 8,
+        unk_e48 = [[0] * 8] * 8,
+        unk_e24 = 120,
+        gpu_fast_die0_sensor_mask64 = 0xc,
+        gpu_fast_die1_sensor_mask64 = 0,
+        gpu_fast_die0_sensor_mask64_alt = 0xc,
+        gpu_fast_die1_sensor_mask64_alt = 0,
+        gpu_fast_die0_sensor_present = 0x01,
+        shared1_tab = [
+            -1, 0x340b, 0x2025, 0x1824, 0x11fc, 0xd76, 0x8e9
+        ] + ([-1] * 9),
+        shared1_a4 = 0xffff,
+        shared2_tab = [0x400, 0x800, -2, -1, -1, -1, -1, -1, 0, 0],
+        shared2_unk_508 = 0xc00001,
+        unk_3cf4 = [302.0, 0, 0, 0, 0, 0, 0, 0],
+        unk_3d14 = [11.0, 0, 0, 0, 0, 0, 0, 0],
+        unk_3d34_0 = [0, 0, 0, 0, 0, 0, 0, 0],
+        unk_118ec = None,
+        hwdb_4e0 = 0,
+        hwdb_534 = 0,
+        num_cores = 4,
+        gpu_core = 9,
+        gpu_rev = 3,
+        hwdb_ab8 = 0,
+        hwdb_abc = 0,
+        hwdb_b30 = 0,
+        rel_max_powers = [0, 17, 26, 36, 51, 71, 100],
+        shared2_t1_coef = None,
+        shared3_tab = [0] * 16,
+        shared3_unk = 0,
+        sram_base = 0,
+        sram_size = 0,
+        rc_unk_54 = 0xffff,
+        unk_hws2_0 = 0,
+        unk_hws2_4 = [0] * 8,
+        unk_hws2_24 = 0,
+        tiling_control = 0xa041,  # t8103's until an iOS render capture (G5)
+    ),
     0x8103: Container(
         chip_id = 0x8103,
         min_sram_volt = 850,
@@ -475,7 +540,11 @@ def build_initdata(agx):
 
     initdata = agx.kshared.new(InitData)
 
-    if Ver.check("V >= V13_3 && G == G14X"):
+    if Ver.check("V >= V13_3 && G == G12"):
+        # what the A13's (iOS 16.4) GPU firmware compares against
+        # (armfw_g12p, fw VA 0xffffff80000275f8)
+        initdata.ver_info = (0x6b88, 0xc128, 0x600, 0xb0)
+    elif Ver.check("V >= V13_3 && G == G14X"):
         initdata.ver_info = (0xb390, 0x70f8, 0x601, 0xb0)
     elif Ver.check("V >= V13_3 && G != G14X"):
         initdata.ver_info = (0x6ba0, 0x1f28, 0x601, 0xb0)
@@ -636,7 +705,7 @@ def build_initdata(agx):
     initdata.uat_page_bits = 14
     initdata.uat_page_size = 0x4000
 
-    if chip_info.chip_id in (0x8103, 0x8112):
+    if chip_info.chip_id in (0x8030, 0x8103, 0x8112):
         phys_mask = 0xffffffc000
     else:
         phys_mask = 0x3ffffffc000
@@ -654,6 +723,15 @@ def build_initdata(agx):
     #initdata.regionC.idle_ts = agx.u.mrs("CNTPCT_EL0") + 24000000
     #initdata.regionC.idle_unk = 0x5b2e8
     #initdata.regionC.idle_to_off_timeout_ms = 20000
+
+    if chosen.chip_id == 0x8030:
+        # RegionC +0xb1dc (inside unk_9100): "initialise the scheduler" --
+        # the G12 firmware's DC_Init handler (fw 0x2a61c) fills its per-pipe
+        # handler and event tables (fn 0x1fa80) only if it is set, then
+        # clears it; zero leaves every queue's handler NULL
+        blob = bytearray(initdata.regionC.unk_9100)
+        blob[0xb1dc - 0x9254:0xb1dc - 0x9254 + 4] = (1).to_bytes(4, "little")
+        initdata.regionC.unk_9100 = bytes(blob)
 
     initdata.regionC.push()
     initdata.push()

@@ -185,7 +185,7 @@ class WorkCommandCP(ConstructClass):
         Ver("V >= V13_0B4", "unk_ts" / TimeStamp),
         Ver("V >= V13_0B4", "unk_2e1" / Default(HexDump(Bytes(0x1c)), bytes(0x1c))),
         Ver("V >= V13_0B4", "unk_flag" / Flag),
-        Ver("V >= V13_0B4", "unk_pad" / Default(HexDump(Bytes(0x10)), bytes(0x10))),
+        Ver("V >= V13_0B4", "unk_pad2" / Default(HexDump(Bytes(0x10)), bytes(0x10))),
         "pad_2d9" / Default(HexDump(Bytes(0x7)), bytes(0x7)),
     )
 

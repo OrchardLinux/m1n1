@@ -87,6 +87,10 @@ class ASCManagementEndpoint(ASCBaseEndpoint):
                 if ep == 0: continue
                 if ep < 0x10:
                     self.asc.start_ep(ep)
+            # The A13's GPU firmware waits for the AP's power state before
+            # it reports its own boot done (Linux's rtkit does this for all)
+            if getattr(self.asc, "chip_id", 0) == 0x8030:
+                self.boot_done()
 
         return True
 

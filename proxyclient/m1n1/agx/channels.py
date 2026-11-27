@@ -3,6 +3,7 @@
 from construct import *
 from ..fw.agx.channels import *
 from ..fw.agx.cmdqueue import *
+from ..constructutils import Ver
 
 class GPUChannel:
     STATE_FIELDS = ChannelStateFields
@@ -171,7 +172,8 @@ class GPUKTraceChannel(GPURXChannel):
         self.log(f"{msg}")
 
 class GPUStatsChannel(GPURXChannel):
-    MSG_CLASS = HexDump(Bytes(0x60))
+    # G12 (A13, V13_3) firmware writes 0x40-byte records
+    MSG_CLASS = HexDump(Bytes(0x40 if Ver.check("G < G13") else 0x60))
 
     def handle_message(self, msg):
         if self.agx.show_stats:
