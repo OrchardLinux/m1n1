@@ -66,6 +66,19 @@ const struct midr_part_features features_a11 = {
     .fast_ipi = true,
 };
 
+/*
+ * A13: no chicken bits known yet. What is needed is the generic set-up of
+ * CYC_OVRD (WFI with state retention, IRQ/FIQ unmasked), without which a core
+ * that m1n1 starts loses its registers in Linux's WFI; and fast IPIs, which
+ * Linux uses. Deep sleep and the cache/power tweaks of A11/M1 stay off until
+ * they are checked on A13.
+ */
+const struct midr_part_features features_a13 = {
+    .apple_sysregs_unlocked = true,
+    .fast_ipi = true,
+    .sleep_mode = SLEEP_NONE,
+};
+
 const struct midr_part_features features_m1 = {
     .disable_dc_mva = true,
     .acc_cfg = true,
@@ -137,6 +150,8 @@ const struct midr_part_info midr_parts[] = {
      &features_a10},
     {MIDR_PART_T8015_MONSOON, "A11 Monsoon", init_t8015_monsoon, &features_a11},
     {MIDR_PART_T8015_MISTRAL, "A11 Mistral", init_t8015_mistral, &features_a11},
+    {MIDR_PART_T8030_LIGHTNING, "A13 Lightning", NULL, &features_a13},
+    {MIDR_PART_T8030_THUNDER, "A13 Thunder", NULL, &features_a13},
     {MIDR_PART_T8103_FIRESTORM, "M1 Firestorm", init_t8103_firestorm, &features_m1},
     {MIDR_PART_T6000_FIRESTORM, "M1 Pro Firestorm", init_t6000_firestorm, &features_m1},
     {MIDR_PART_T6001_FIRESTORM, "M1 Max Firestorm", init_t6001_firestorm, &features_m1},
