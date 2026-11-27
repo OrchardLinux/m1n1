@@ -4,8 +4,8 @@
 
 #include "kboot.h"
 #include "adt.h"
-#include "apcie_nvme.h"
 #include "akf_fw.h"
+#include "apcie_nvme.h"
 #include "assert.h"
 #include "clk.h"
 #include "dapf.h"
@@ -369,9 +369,8 @@ static int dt_set_nvme_hmb(void)
     int adt_node = adt_path_offset(adt, "/arm-io/nvme-mmu0");
     if (adt_node < 0)
         bail("ADT: /arm-io/nvme-mmu0 not found\n");
-    if (ADT_GETPROP_ARRAY(adt, adt_node, "sart-region", region) < 0 || !region[0] ||
-        !region[1] || (region[0] & 0xfffff) || (region[1] & 0xfffff) ||
-        region[0] + region[1] < region[0])
+    if (ADT_GETPROP_ARRAY(adt, adt_node, "sart-region", region) < 0 || !region[0] || !region[1] ||
+        (region[0] & 0xfffff) || (region[1] & 0xfffff) || region[0] + region[1] < region[0])
         bail("ADT: invalid NVMe HMB region\n");
     fdt64_st(&reg[0], region[0]);
     fdt64_st(&reg[1], region[1]);

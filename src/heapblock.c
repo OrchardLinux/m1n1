@@ -32,8 +32,7 @@ void heapblock_set_limit(void *limit)
 {
     heap_limit = limit;
     if (limit)
-        printf("Heap limit: %p (%ld MiB)\n", limit,
-               (s64)(((u8 *)limit - (u8 *)heap_base) >> 20));
+        printf("Heap limit: %p (%ld MiB)\n", limit, (s64)(((u8 *)limit - (u8 *)heap_base) >> 20));
     else
         printf("Heap limit: none\n");
 }
