@@ -2784,7 +2784,10 @@ static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix
         if (strncmp(name, adt_prefix, adt_prefix_len))
             continue;
 
-        if (name[adt_prefix_len] < '0' || name[adt_prefix_len] > '9')
+        /* Numbered (usb-drd0, usb-drd1, ...) or a single unnumbered node: the
+           A13 ADT (N104) has just "usb-drd" */
+        if (name[adt_prefix_len] &&
+            (name[adt_prefix_len] < '0' || name[adt_prefix_len] > '9'))
             continue;
 
         path[pp] = node;
@@ -3232,7 +3235,9 @@ int kboot_prepare_dt(void *fdt)
     if (fdt_add_mem_rsv(dt, (u64)_base, ((u64)_end) - ((u64)_base)))
         bail("FDT: couldn't add reservation for m1n1\n");
 
-    if (!cpu_features->apple_sysregs_unlocked) {
+    /* A13 (chip 0x8030) uses features_unknown, whose false apple_sysregs_unlocked
+     * does NOT imply the M4-only CTRR registers exist; they trap at EL1 on N104. */
+    if (chip_id != 0x8030 && !cpu_features->apple_sysregs_unlocked) {
         // On M4* / A18 Pro / M5*, there is a CTRR instance left enabled only
         // on the secondary (non-boot) cores. Add a reserved-memory region to
         // prevent Linux from crashing when allocating this memory and writing
@@ -3243,6 +3248,8 @@ int kboot_prepare_dt(void *fdt)
             printf("WARNING: M4+ SMP-RO is large (48KB)");
         if (fdt_add_mem_rsv(dt, ro_start, ro_end - ro_start))
             bail("FDT: couldn't add reservation for M4+ SMP-RO CTRR area\n");
+    } else if (chip_id == 0x8030) {
+        printf("FDT: skipping M4-only CTRR reservation on A13\n");
     }
 
     /* setup console log buffer early to capture as much log as possible */
@@ -3369,6 +3376,26 @@ int kboot_boot(void *kernel)
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);
     printf("Preparing to boot kernel at %p with fdt at %p\n", kernel, dt);
+
+    /*
+     * Apple cores: mmu_shutdown() flushes via set/way (DCCISW), which on this
+     * cache hierarchy does not reach the Point of Coherency. With caches then
+     * turned off, the CPU fetches stale payload bytes and reads a stale FDT /
+     * initrd from RAM, faulting silently. Clean the payload regions to PoC by
+     * VA and invalidate the icache, mirroring the chainload path.
+     */
+    {
+        struct kernel_header *hdr = kernel;
+        dc_civac_range(kernel, hdr->image_size);
+        if (dt && dt_bufsize)
+            dc_civac_range(dt, dt_bufsize);
+        if (initrd_start && initrd_size)
+            dc_civac_range(initrd_start, initrd_size);
+        sysop("dsb sy");
+        ic_ivau_range(kernel, hdr->image_size);
+        sysop("dsb sy");
+        sysop("isb");
+    }
 
     next_stage.entry = kernel;
     next_stage.args[0] = (u64)dt;
