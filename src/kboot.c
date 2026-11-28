@@ -277,6 +277,14 @@ static int dt_set_chosen(void)
         printf("FDT: %s = '%s'\n", name, value);
     }
 
+    /*
+     * Where the OS leaves its resume entry for a wake from suspend to RAM
+     * (startup.c). m1n1 runs identity mapped, so this is the physical address.
+     */
+    extern volatile u64 m1n1_resume_entry;
+    if (fdt_setprop_u64(dt, node, "apple,m1n1-resume", (u64)&m1n1_resume_entry))
+        bail("FDT: couldn't set chosen.apple,m1n1-resume property\n");
+
     if (initrd_start && initrd_size) {
         if (fdt_setprop_u64(dt, node, "linux,initrd-start", (u64)initrd_start))
             bail("FDT: couldn't set chosen.linux,initrd-start property\n");
@@ -3432,6 +3440,13 @@ int kboot_boot(void *kernel)
             dc_civac_range(dt, dt_bufsize);
         if (initrd_start && initrd_size)
             dc_civac_range(initrd_start, initrd_size);
+        /*
+         * m1n1 stays resident: cores the OS powers down and starts again
+         * re-enter it through IORVBAR with caches off and read its SMP state
+         * from RAM, as the boot CPU reads the resume slot on a wake from
+         * suspend to RAM.
+         */
+        smp_clean_for_reentry();
         sysop("dsb sy");
         ic_ivau_range(kernel, hdr->image_size);
         sysop("dsb sy");

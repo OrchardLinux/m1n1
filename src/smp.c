@@ -60,6 +60,19 @@ u64 boot_cpu_mpidr = 0;
 void smp_secondary_entry(void)
 {
     struct spin_table *me = &spin_table[target_cpu];
+    u64 mpidr = mrs(MPIDR_EL1) & 0xFFFFFF;
+
+    /*
+     * A core the OS powered off and started again comes back through its
+     * IORVBAR without m1n1 having set target_cpu: find its table by MPIDR.
+     */
+    for (int i = 0; i < MAX_CPUS; i++) {
+        if (spin_table[i].flag && spin_table[i].mpidr == mpidr) {
+            target_cpu = i;
+            me = &spin_table[i];
+            break;
+        }
+    }
 
     if (in_el2())
         msr(TPIDR_EL2, target_cpu);
@@ -501,6 +514,24 @@ u64 smp_wait(int cpu)
         sysop("dmb sy");
 
     return target->retval;
+}
+
+/* What a core re-entering through IORVBAR with caches off reads, to RAM. */
+void smp_clean_for_reentry(void)
+{
+    extern volatile u64 m1n1_resume_entry;
+    extern volatile bool m1n1_os_running;
+
+    m1n1_os_running = true;
+    dc_civac_range((void *)&m1n1_os_running, sizeof(m1n1_os_running));
+    dc_civac_range(&boot_cpu_idx, sizeof(boot_cpu_idx));
+    dc_civac_range(&boot_cpu_mpidr, sizeof(boot_cpu_mpidr));
+    dc_civac_range((void *)&wfe_mode, sizeof(wfe_mode));
+    dc_civac_range(&target_cpu, sizeof(target_cpu));
+    dc_civac_range(&_reset_stack, sizeof(_reset_stack));
+    dc_civac_range(spin_table, sizeof(spin_table));
+    dc_civac_range((void *)&m1n1_resume_entry, sizeof(m1n1_resume_entry));
+    sysop("dsb sy");
 }
 
 void smp_set_wfe_mode(bool new_mode)

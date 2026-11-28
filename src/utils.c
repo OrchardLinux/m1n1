@@ -14,6 +14,7 @@
 #include "smp.h"
 #include "types.h"
 #include "utils.h"
+#include "memory.h"
 #include "vsprintf.h"
 #include "xnuboot.h"
 
@@ -85,11 +86,21 @@ int snprintf(char *buffer, size_t size, const char *fmt, ...)
     return i;
 }
 
+/*
+ * Set when an OS has taken over. Cores the OS powers down and starts again
+ * re-enter m1n1 with the MMU off; they must not touch the console devices,
+ * which the OS now owns, nor m1n1 state the OS never sees in RAM.
+ */
+volatile bool m1n1_os_running;
+
 int debug_printf(const char *fmt, ...)
 {
     va_list args;
     char buffer[512];
     int i;
+
+    if (m1n1_os_running && !mmu_active())
+        return 0;
 
     va_start(args, fmt);
     i = vsnprintf(buffer, sizeof(buffer), fmt, args);

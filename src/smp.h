@@ -32,6 +32,7 @@ bool smp_is_alive(int cpu);
 uint64_t smp_get_mpidr(int cpu);
 u64 smp_get_release_addr(int cpu);
 void smp_set_wfe_mode(bool new_mode);
+void smp_clean_for_reentry(void);
 void smp_send_ipi(int cpu);
 
 static inline int smp_id(void)

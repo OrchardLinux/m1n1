@@ -4,6 +4,7 @@
 
 #include "adt.h"
 #include "iodev.h"
+#include "memory.h"
 #include "types.h"
 #include "uart.h"
 #include "uart_regs.h"
@@ -91,6 +92,10 @@ u8 uart_getchar(void)
 
 void uart_puts(const char *s)
 {
+    extern volatile bool m1n1_os_running;
+
+    if (m1n1_os_running && !mmu_active())
+        return;
     while (*s)
         uart_putchar(*(s++));
 
