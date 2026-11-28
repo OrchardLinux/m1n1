@@ -42,6 +42,9 @@ struct sart_dev {
 
 #define APPLE_SART2_FLAGS_ALLOW 0xff
 
+/* SARTv1 (A12): SARTv2 registers, fewer flag bits */
+#define APPLE_SART1_FLAGS_ALLOW 0x6f
+
 /* SARTv3 registers */
 #define APPLE_SART3_CONFIG(idx) (0x00 + 4 * (idx))
 
@@ -229,6 +232,15 @@ sart_dev_t *sart_init(const char *adt_path)
             sart->get_entry = sart0_get_entry;
             sart->set_entry = sart0_set_entry;
             sart->flags_allow = APPLE_SART0_FLAGS_ALLOW;
+            break;
+        case 1:
+            /*
+             * The A12 has SART2's registers. iBoot never writes all flag
+             * bits there: it leaves 0x6f on the entries for data buffers.
+             */
+            sart->get_entry = sart2_get_entry;
+            sart->set_entry = sart2_set_entry;
+            sart->flags_allow = APPLE_SART1_FLAGS_ALLOW;
             break;
         case 2:
             sart->get_entry = sart2_get_entry;

@@ -40,6 +40,19 @@ class T8015ASCRegs(RegMap):
     OUTBOX0     = 0x8830, Register64
     OUTBOX1     = 0x8838, R_OUTBOX1
 
+class T8030ASCRegs(RegMap):
+    # A13: the M1's ASC wrapper with the A11's mailbox control registers
+    # (Linux: "apple,t8030-asc-mailbox", "apple,t8015-asc-mailbox")
+    CPU_CONTROL = 0x0044, R_CPU_CONTROL
+    CPU_STATUS  = 0x0048, R_CPU_STATUS
+
+    INBOX_CTRL  = 0x8108, R_MBOX_CTRL
+    OUTBOX_CTRL = 0x810c, R_MBOX_CTRL
+    INBOX0      = 0x8800, Register64
+    INBOX1      = 0x8808, R_INBOX1
+    OUTBOX0     = 0x8830, Register64
+    OUTBOX1     = 0x8838, R_OUTBOX1
+
 class ASCRegs(RegMap):
     CPU_CONTROL = 0x0044, R_CPU_CONTROL
     CPU_STATUS  = 0x0048, R_CPU_STATUS
@@ -91,6 +104,8 @@ class ASC:
                 self.start_val = 1
             else:
                 raise ValueError("Unsupported ASC address")
+        elif self.chip_id == 0x8030:
+            self.asc = T8030ASCRegs(u, asc_base)
         else:
             self.asc = ASCRegs(u, asc_base)
         self.verbose = 0

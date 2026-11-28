@@ -90,6 +90,7 @@
 #define HID1_TRAP_SMC                          BIT(54)
 #define HID1_ENABLE_MDSB_STALL_PIPELINE_ECO    BIT(58)
 #define HID1_ENABLE_BR_KILL_LIMIT              BIT(60)
+#define HID1_RCC_FORCE_ALL_IEX_L3_CLKS_ON      BIT(23)
 #define HID1_CPMU_DEBUG_OVF                    BIT(61)
 #define HID1_ZCL_RF_GNUM_DIST_MODE             BIT(62)
 
@@ -151,6 +152,7 @@
 #define EHID1_EN_LFSR                            BIT(63)
 
 #define SYS_IMP_APL_HID3                                   sys_reg(3, 0, 15, 3, 0)
+#define HID3_DIS_COLOR_OPT                                 BIT(2)
 #define HID3_DISABLE_DC_ZVA_CMD_ONLY                       BIT(25)
 #define HID3_DISABLE_ARBITER_FIX_BIF_CRD                   BIT(44)
 #define HID3_DIS_XMON_SNP_EVICT_TRIGGER_L2_STARAVTION_MODE BIT(50)
@@ -216,6 +218,7 @@
 
 #define SYS_IMP_APL_EHID4                                         sys_reg(3, 0, 15, 4, 1)
 #define SYS_IMP_APL_EHID3                                         sys_reg(3, 0, 15, 3, 1)
+#define EHID3_DIS_COLOR_OPT                                       BIT(2)
 #define EHID3_DISABLE_DC_ZVA_CMD_ONLY                             BIT(25)
 #define EHID4_DISABLE_HW_PREF_LD                                  BIT(0)
 #define EHID4_DISABLE_HW_PREF_ST                                  BIT(1)
@@ -318,13 +321,15 @@
 #define EHID9_DEV_2_THROTTLE_LIMIT_MASK GENMASK(11, 6)
 #define EHID9_DEV_2_THROTTLE_LIMIT(x)   ((ULONG(x)) << 6)
 
-#define SYS_IMP_APL_HID10               sys_reg(3, 0, 15, 10, 0)
-#define SYS_IMP_APL_EHID10              sys_reg(3, 0, 15, 10, 1)
-#define HID10_FORCE_WAIT_STATE_DRAIN_UC BIT(32)
-#define HID10_DISABLE_ZVA_TEMPORAL_TSO  BIT(49)
+#define SYS_IMP_APL_HID10                   sys_reg(3, 0, 15, 10, 0)
+#define SYS_IMP_APL_EHID10                  sys_reg(3, 0, 15, 10, 1)
+#define EHID10_RCC_DIS_PWR_SAVE_PRF_CLK_OFF BIT(19)
+#define HID10_FORCE_WAIT_STATE_DRAIN_UC     BIT(32)
+#define HID10_DISABLE_ZVA_TEMPORAL_TSO      BIT(49)
 
 #define SYS_IMP_APL_HID11             sys_reg(3, 0, 15, 11, 0)
 #define SYS_IMP_APL_HID11_LEGACY      sys_reg(3, 0, 15, 13, 0) /* A7-A9 */
+#define HID11_DIS_X64_NT_LAUNCH_OPT   BIT(1)
 #define HID11_DISABLE_FILL_C1_BUB_OPT BIT(7)
 #define HID11_ENABLE_FIX_UC_55719865  BIT(15)
 #define HID11_DISABLE_DMP             BIT(30)

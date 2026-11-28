@@ -6,6 +6,7 @@
 #include "i2c.h"
 #include "iodev.h"
 #include "malloc.h"
+#include "memory.h"
 #include "pmgr.h"
 #include "soc.h"
 #include "string.h"
@@ -23,6 +24,7 @@ struct usb_drd_regs {
     uintptr_t drd_regs;
     uintptr_t drd_regs_unk3;
     uintptr_t atc;
+    bool ausb;
 };
 
 #if USB_IODEV_COUNT > 100
@@ -67,12 +69,54 @@ usb_type_t usb_type = USB_TYPE_DWC3;
 #define PIPEHANDLER_DUMMY_PHY_EN         BIT(15)
 #define PIPEHANDLER_NATIVE_POWER_DOWN    GENMASK(3, 0)
 
+/*
+ * A12/A13 iPhones (Lightning): one USB2 port, its ADT nodes unnumbered
+ * (usb-drd, atc-phy, dart-usb/mapper-usb-drd) and the phy an AUSB one
+ * (atc-phy,t8030: registers at reg 1). Cascadia downstream.
+ */
+#define AUSB_CTL                  0x00
+#define AUSB_CTL_RESET            BIT(0)
+#define AUSB_CTL_PWRDOWN          BIT(2)
+#define AUSB_CTL_SIDDQ            BIT(3)
+#define AUSB_SIG                  0x04
+#define AUSB_SIG_VBUSDET_FORCE_EN BIT(1)
+
+static const char *usb_bare_path(char *path, size_t size, const char *bare, u32 idx)
+{
+    /* the numbered path is in path already; only port 0 can be unnumbered */
+    if (adt_path_offset(adt, path) >= 0 || idx || !bare || adt_path_offset(adt, bare) < 0)
+        return path;
+    snprintf(path, size, "%s", bare);
+    return path;
+}
+
+static void usb_ausb_bringup(uintptr_t phy, const char *phy_path)
+{
+    int node = adt_path_offset(adt, phy_path);
+    u32 len;
+    const u32 *tun = adt_getprop(adt, node, "tunable-device", &len);
+
+    /* entries {width, offset, mask, value}; Linux writes the same values */
+    for (u32 i = 0; tun && i + 4 <= len / 4; i += 4)
+        mask32(phy + tun[i + 1], tun[i + 2], tun[i + 3]);
+
+    set32(phy + AUSB_CTL, AUSB_CTL_RESET);
+    udelay(20);
+    clear32(phy + AUSB_CTL, AUSB_CTL_PWRDOWN | AUSB_CTL_SIDDQ);
+    udelay(20);
+    clear32(phy + AUSB_CTL, AUSB_CTL_RESET);
+    udelay(1500);
+    set32(phy + AUSB_SIG, AUSB_SIG_VBUSDET_FORCE_EN);
+    printf("usb: AUSB phy @0x%lx up (%u tunables)\n", phy, tun ? len / 16 : 0);
+}
+
 static dart_dev_t *usb_dart_init(u32 idx)
 {
     int mapper_offset;
-    char path[sizeof(FMT_DART_MAPPER_PATH)];
+    char path[48];
 
     snprintf(path, sizeof(path), FMT_DART_MAPPER_PATH, idx, idx);
+    usb_bare_path(path, sizeof(path), "/arm-io/dart-usb/mapper-usb-drd", idx);
     mapper_offset = adt_path_offset(adt, path);
     if (mapper_offset < 0) {
         // Device not present
@@ -86,6 +130,7 @@ static dart_dev_t *usb_dart_init(u32 idx)
     }
 
     snprintf(path, sizeof(path), FMT_DART_PATH, idx);
+    usb_bare_path(path, sizeof(path), "/arm-io/dart-usb", idx);
     return dart_init_adt(path, 1, dart_idx, false);
 }
 
@@ -95,10 +140,11 @@ static int usb_drd_get_regs(u32 idx, struct usb_drd_regs *regs)
     int adt_drd_offset;
     int adt_phy_path[8];
     int adt_phy_offset;
-    char phy_path[sizeof(FMT_ATC_PATH)];
-    char drd_path[sizeof(FMT_DRD_PATH)];
+    char phy_path[32];
+    char drd_path[32];
 
     snprintf(drd_path, sizeof(drd_path), FMT_DRD_PATH, idx);
+    usb_bare_path(drd_path, sizeof(drd_path), "/arm-io/usb-drd", idx);
     adt_drd_offset = adt_path_offset_trace(adt, drd_path, adt_drd_path);
     if (adt_drd_offset < 0) {
         // Nonexistent device
@@ -106,13 +152,15 @@ static int usb_drd_get_regs(u32 idx, struct usb_drd_regs *regs)
     }
 
     snprintf(phy_path, sizeof(phy_path), FMT_ATC_PATH, idx);
+    usb_bare_path(phy_path, sizeof(phy_path), "/arm-io/atc-phy", idx);
     adt_phy_offset = adt_path_offset_trace(adt, phy_path, adt_phy_path);
     if (adt_phy_offset < 0) {
         printf("usb: Error getting phy node %s\n", phy_path);
         return -1;
     }
 
-    if (adt_get_reg(adt, adt_phy_path, "reg", 0, &regs->atc, NULL) < 0) {
+    regs->ausb = adt_is_compatible(adt, adt_phy_offset, "atc-phy,t8030");
+    if (adt_get_reg(adt, adt_phy_path, "reg", regs->ausb ? 1 : 0, &regs->atc, NULL) < 0) {
         printf("usb: Error getting reg with index 0 for %s.\n", phy_path);
         return -1;
     }
@@ -120,7 +168,8 @@ static int usb_drd_get_regs(u32 idx, struct usb_drd_regs *regs)
         printf("usb: Error getting reg with index 0 for %s.\n", drd_path);
         return -1;
     }
-    if (adt_get_reg(adt, adt_drd_path, "reg", 3, &regs->drd_regs_unk3, NULL) < 0) {
+    /* the pipehandler (reg 3) is the Type-C port's; the AUSB port has none */
+    if (!regs->ausb && adt_get_reg(adt, adt_drd_path, "reg", 3, &regs->drd_regs_unk3, NULL) < 0) {
         printf("usb: Error getting reg with index 3 for %s.\n", drd_path);
         return -1;
     }
@@ -140,8 +189,21 @@ int usb_phy_bringup(u32 idx)
         return -1;
 
     snprintf(path, sizeof(path), FMT_ATC_PATH, idx);
+    usb_bare_path(path, sizeof(path), "/arm-io/atc-phy", idx);
     if (pmgr_adt_power_enable(path) < 0)
         return -1;
+
+    if (usb_regs.ausb) {
+        char dart[24], drd[24];
+        snprintf(dart, sizeof(dart), FMT_DART_PATH, idx);
+        usb_bare_path(dart, sizeof(dart), "/arm-io/dart-usb", idx);
+        snprintf(drd, sizeof(drd), FMT_DRD_PATH, idx);
+        usb_bare_path(drd, sizeof(drd), "/arm-io/usb-drd", idx);
+        if (pmgr_adt_power_enable(dart) < 0 || pmgr_adt_power_enable(drd) < 0)
+            return -1;
+        usb_ausb_bringup(usb_regs.atc, path);
+        return 0;
+    }
 
     snprintf(path, sizeof(path), FMT_DART_PATH, idx);
     if (pmgr_adt_power_enable(path) < 0)
@@ -173,6 +235,20 @@ dwc3_dev_t *usb_iodev_bringup(u32 idx)
     struct usb_drd_regs usb_reg;
     if (usb_drd_get_regs(idx, &usb_reg) < 0)
         return NULL;
+
+    /* the AUSB port's dwc3 sits behind both instances of dart-usb */
+    if (usb_reg.ausb) {
+        char path[24];
+        u64 base;
+        snprintf(path, sizeof(path), FMT_DART_PATH, idx);
+        usb_bare_path(path, sizeof(path), "/arm-io/dart-usb", idx);
+        int node[8];
+        if (adt_path_offset_trace(adt, path, node) >= 0 &&
+            adt_get_reg(adt, node, "reg", 0, &base, NULL) >= 0) {
+            dart_mirror(usb_dart, base);
+            printf("usb: %s instance 0 @0x%lx mirrors instance 1\n", path, (uintptr_t)base);
+        }
+    }
 
     return usb_dwc3_init(usb_reg.drd_regs, usb_dart);
 }
@@ -319,6 +395,23 @@ static int usb_init_i2c(const char *i2c_path)
     return 0;
 }
 
+static void usb_t8020_dart_setup(void)
+{
+    if (pmgr_adt_power_enable("/arm-io/dart-usb") < 0)
+        printf("usb: could not power dart-usb, trying it anyway\n");
+
+    dart_dev_t *dart = dart_init_adt("/arm-io/dart-usb", 0, 0, false);
+    if (!dart) {
+        printf("usb: no dart-usb; DMA translation unavailable\n");
+        return;
+    }
+
+    if (dart_map(dart, ram_base & 0xffffffff, (void *)ram_base, mem_size_actual) < 0)
+        printf("usb: dart-usb flat map at 0x%lx failed\n", ram_base & 0xffffffff);
+    else
+        printf("usb: dart-usb stream 0 mapped for 32-bit DWC2 DMA\n");
+}
+
 int usb_complex_init(struct usb_complex_config *config)
 {
     usb_type = USB_TYPE_DWC2;
@@ -342,6 +435,14 @@ int usb_complex_init(struct usb_complex_config *config)
                     USBX_REMAP_TO_DRAM_BITS_T8011);
             write32(config->USBComplexBase + USBX_EHCI_REMAP_CTL_T8011,
                     USBX_REMAP_TO_DRAM_BITS_T8011);
+            break;
+        case USBCOMPLEX_T8020:
+            /* T8020 uses the T8015 device-widget offset.  Keep address bits
+             * zero for the DART IOVA and retain both DMA enable bits. */
+            write32(config->USBComplexBase + USBX_CTL_T8011, USBX_CTL_EN_T8011);
+            write32(config->USBComplexBase + USBX_USBDEV_REMAP_CTL_T8015,
+                    USBX_REMAP_DMA_EN_ONLY_T8020);
+            usb_t8020_dart_setup();
             break;
         case USBCOMPLEX_T8015:
             write32(config->USBComplexBase + USBX_CTL_T8011, USBX_CTL_EN_T8011);
@@ -455,7 +556,9 @@ int usb_complex_init_adt(void)
     // the usb-device on iPad Pro 2 is some USB3 device so derive dwc2 base from phy base instead
     DWC2Base = (USB2Phy_Base & ~0xfffULL) + 0x100000;
 
-    if (adt_is_compatible(adt, usbComplex_offset, "usb-complex,s5l8960x")) {
+    if (adt_is_compatible(adt, usbComplex_offset, "usb-complex,t8020")) {
+        type = USBCOMPLEX_T8020;
+    } else if (adt_is_compatible(adt, usbComplex_offset, "usb-complex,s5l8960x")) {
         type = USBCOMPLEX_S5L8960X;
     } else if (adt_is_compatible(adt, usbComplex_offset, "usb-complex,t8015")) {
         type = USBCOMPLEX_T8015;
@@ -468,15 +571,33 @@ int usb_complex_init_adt(void)
         return -1;
     }
 
-    if (pmgr_adt_power_enable_index("/arm-io/usb-complex", 0) < 0) {
-        printf("usb: could not enable /arm-io/usb-complex power domain 0\n");
-        return -1;
+    /*
+     * T8020 advertises four clock-gates (0x66, 0x67, 0x68, 0xf5).  The old
+     * T8011 path only enabled indices 0 and 1, leaving the usb-device/DWC2
+     * register block powered off.  The resulting first read at DWC2+0x40
+     * raises a synchronous external abort on the XR.  Enable every gate on
+     * T8020; retain the narrow historical sequence for older SoCs.
+     */
+    if (type == USBCOMPLEX_T8020) {
+        printf("usb: T8020 enabling every usb-complex clock gate\n");
+        if (pmgr_adt_power_enable("/arm-io/usb-complex") < 0) {
+            printf("usb: could not enable all T8020 usb-complex power domains\n");
+            return -1;
+        }
+    } else {
+        if (pmgr_adt_power_enable_index("/arm-io/usb-complex", 0) < 0) {
+            printf("usb: could not enable /arm-io/usb-complex power domain 0\n");
+            return -1;
+        }
+
+        if (pmgr_adt_power_enable_index("/arm-io/usb-complex", 1) < 0) {
+            printf("usb: could not enable /arm-io/usb-complex power domain 1\n");
+            return -1;
+        }
     }
 
-    if (pmgr_adt_power_enable_index("/arm-io/usb-complex", 1) < 0) {
-        printf("usb: could not enable /arm-io/usb-complex power domain 1\n");
-        return -1;
-    }
+    printf("usb: complex=%p phy=%p dwc2=%p cfg0=%08x cfg1=%08x type=%d\n", (void *)USBComplexBase,
+           (void *)USB2Phy_Base, (void *)DWC2Base, cfg0, cfg1, type);
 
     struct usb_complex_config config = {
         .USBComplexBase = USBComplexBase,

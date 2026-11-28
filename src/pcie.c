@@ -135,12 +135,20 @@ const struct fuse_bits pcie_fuse_bits_t8112[] = {
 };
 /* clang-format on */
 
+/* AppleT803xPCIe::_initializePhy: two PHY IP fields from the PMGR fuses */
+const struct fuse_bits pcie_fuse_bits_t8030[] = {
+    {0x005c, 0x0400, 2, 11, 4},
+    {0x0028, 0x0a3c, 12, 2, 5},
+    {},
+};
+
 enum apcie_type {
     APCIE_T81XX = 0,
     APCIE_T602X = 1,
     APCIE_T8122 = 2,
     APCIE_T6031 = 3,
     APCIE_T8132 = 4,
+    APCIE_T8030 = 5,
 };
 
 struct reg_info {
@@ -160,6 +168,21 @@ struct reg_info {
 
 static const struct reg_info regs_t8xxx_t600x = {
     .type = APCIE_T81XX,
+    .compat = APCIE_T81XX,
+    .shared_reg_count = 6,
+    .config_idx = 0,
+    .rc_idx = 1,
+    .phy_common_idx = -1,
+    .phy_idx = 2,
+    .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
+    .phy_ip_idx = 3,
+    .axi_idx = 4,
+    .fuse_idx = 5,
+};
+
+/* the t8103 layout; the PHY IP tunables come as one apcie-phy-ip-tunables */
+static const struct reg_info regs_t8030 = {
+    .type = APCIE_T8030,
     .compat = APCIE_T81XX,
     .shared_reg_count = 6,
     .config_idx = 0,
@@ -276,7 +299,20 @@ static int pcie_init_controller(int controller, const char *path)
         return -1;
     }
 
-    if (adt_is_compatible(adt, adt_offset, "apcie,t8103")) {
+    if (adt_is_compatible(adt, adt_offset, "apcie,t8020")) {
+        /*
+         * T8020 uses the T8103 register layout.  Its ADT provides one
+         * combined PHY-IP tunables set and does not provide usable fuse
+         * descriptions, so initialize it from those tunables alone.
+         */
+        fuse_bits = NULL;
+        state->pcie_regs = &regs_t8xxx_t600x;
+        printf("pcie: Initializing t8020 PCIe controller\n");
+    } else if (adt_is_compatible(adt, adt_offset, "apcie,t8030")) {
+        fuse_bits = pcie_fuse_bits_t8030;
+        state->pcie_regs = &regs_t8030;
+        printf("pcie: Initializing t8030 PCIe controller\n");
+    } else if (adt_is_compatible(adt, adt_offset, "apcie,t8103")) {
         fuse_bits = pcie_fuse_bits_t8103;
         state->pcie_regs = &regs_t8xxx_t600x;
         printf("pcie: Initializing t8103 PCIe controller\n");
@@ -433,8 +469,8 @@ static int pcie_init_controller(int controller, const char *path)
         return -1;
     }
 
-    /* ??? */
-    if (controller == APCIE)
+    /* ??? (not in AppleT803xPCIe's sequence) */
+    if (controller == APCIE && state->pcie_regs->type != APCIE_T8030)
         write32(state->rc_base + 0x4, 0);
 
     if (!adt_getprop(adt, adt_offset, "apcie-common-tunables", NULL)) {
@@ -485,6 +521,10 @@ static int pcie_init_controller(int controller, const char *path)
         if (state->pcie_regs->type == APCIE_T81XX) {
             set32(state->rc_base + APCIE_PHYIF_CTRL, APCIE_PHYIF_CTRL_RUN);
             udelay(1);
+        } else if (state->pcie_regs->type == APCIE_T8030) {
+            /* iOS waits 200 here (IODelay or IOSleep: take the longer) */
+            set32(state->rc_base + APCIE_PHYIF_CTRL, APCIE_PHYIF_CTRL_RUN);
+            mdelay(200);
         } else if (state->pcie_regs->type == APCIE_T602X ||
                    state->pcie_regs->compat == APCIE_T8122) {
             set32(state->phy_base[phy] + 4, 0x01);
@@ -500,6 +540,14 @@ static int pcie_init_controller(int controller, const char *path)
                    fuse << fuse_bits[i].tgt_bit);
         }
 
+        if (state->pcie_regs->type == APCIE_T8030) {
+            if (tunables_apply_local_addr(path, "apcie-phy-ip-tunables", state->phy_ip_base[phy])) {
+                printf("pcie: Error applying %s for %s\n", "apcie-phy-ip-tunables", path);
+                return -1;
+            }
+            continue;
+        }
+
         char pll_prop[64];
         char auspma_prop[64];
 
@@ -511,13 +559,20 @@ static int pcie_init_controller(int controller, const char *path)
             snprintf(auspma_prop, sizeof(auspma_prop), "apcie-phy-%d-ip-auspma-tunables", phy);
         }
 
-        if (tunables_apply_local_addr(path, pll_prop, state->phy_ip_base[phy])) {
-            printf("pcie: Error applying %s for %s\n", pll_prop, path);
-            return -1;
-        }
-        if (tunables_apply_local_addr(path, auspma_prop, state->phy_ip_base[phy])) {
-            printf("pcie: Error applying %s for %s\n", auspma_prop, path);
-            return -1;
+        if (adt_getprop(adt, adt_offset, "apcie-phy-ip-tunables", NULL)) {
+            if (tunables_apply_local_addr(path, "apcie-phy-ip-tunables", state->phy_ip_base[phy])) {
+                printf("pcie: Error applying apcie-phy-ip-tunables for %s\n", path);
+                return -1;
+            }
+        } else {
+            if (tunables_apply_local_addr(path, pll_prop, state->phy_ip_base[phy])) {
+                printf("pcie: Error applying %s for %s\n", pll_prop, path);
+                return -1;
+            }
+            if (tunables_apply_local_addr(path, auspma_prop, state->phy_ip_base[phy])) {
+                printf("pcie: Error applying %s for %s\n", auspma_prop, path);
+                return -1;
+            }
         }
 
         if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->compat == APCIE_T8122) {
@@ -555,6 +610,10 @@ static int pcie_init_controller(int controller, const char *path)
         }
     }
 
+    /* AppleT803xPCIe::_enableRootComplex, after the PHY */
+    if (state->pcie_regs->type == APCIE_T8030)
+        clear32(state->rc_base + 0x34, 0x1);
+
     for (u32 port = 0; port < state->port_count; port++) {
         char bridge[64];
         int bridge_offset;
@@ -575,8 +634,11 @@ static int pcie_init_controller(int controller, const char *path)
                 break;
         }
 
-        if ((bridge_offset = adt_path_offset(adt, bridge)) < 0)
+        if ((bridge_offset = adt_path_offset(adt, bridge)) < 0) {
+            /* not in this ADT (T8030: only bridges 2 and 3), but owns its config slot */
+            config_base += (1 << 15);
             continue;
+        }
 
         printf("pcie: Initializing port %d\n", port);
 
@@ -756,13 +818,16 @@ static int pcie_init_controller(int controller, const char *path)
             printf("pcie: Error applying %s for %s\n", "pcie-rc-tunables", bridge);
             return -1;
         }
-        if (tunables_apply_local_addr(bridge, "pcie-rc-gen3-shadow-tunables", config_base)) {
-            printf("pcie: Error applying %s for %s\n", "pcie-rc-gen3-shadow-tunables", bridge);
-            return -1;
-        }
-        if (tunables_apply_local_addr(bridge, "pcie-rc-gen4-shadow-tunables", config_base)) {
-            printf("pcie: Error applying %s for %s\n", "pcie-rc-gen4-shadow-tunables", bridge);
-            return -1;
+        /* T8020/T8030 Gen2 ports have no mandatory Gen3/Gen4 shadow sets. */
+        static const char *const shadow[] = {"pcie-rc-gen3-shadow-tunables",
+                                             "pcie-rc-gen4-shadow-tunables"};
+        for (int i = 0; i < 2; i++) {
+            if (!adt_getprop(adt, bridge_offset, shadow[i], NULL))
+                continue;
+            if (tunables_apply_local_addr(bridge, shadow[i], config_base)) {
+                printf("pcie: Error applying %s for %s\n", shadow[i], bridge);
+                return -1;
+            }
         }
 
         u32 max_speed;

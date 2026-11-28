@@ -86,8 +86,11 @@ class DC_Write32B(ConstructClass):
 
 class DC_Init(ConstructClass):
     subcon =  Struct (
-        Ver("V < V13_3", "msg_type" / Const(0x19, Int32ul)),
-        Ver("V >= V13_3", "msg_type" / Const(0x1a, Int32ul)),
+        Ver("V < V13_3 && G >= G13", "msg_type" / Const(0x19, Int32ul)),
+        Ver("V >= V13_3 && G >= G13", "msg_type" / Const(0x1a, Int32ul)),
+        # G12 (armfw_g12p, iOS 16.4): 0x10 initialises the scheduler (fw
+        # 0xa6c0 -> 0x2a61c); its 0x1a only sets a flag
+        Ver("G < G13", "msg_type" / Const(0x10, Int32ul)),
         "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c))),
         Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )

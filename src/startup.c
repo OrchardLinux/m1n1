@@ -200,6 +200,7 @@ void _start_c(void *boot_args, void *base)
     dockchannel_uart_init();
 
     uart_puts("Initializing");
+    uart_show_rx();
     get_device_info();
 
     printf("CPU init (MIDR: 0x%lx smp_id:0x%x)...\n", mrs(MIDR_EL1), smp_id());
@@ -216,8 +217,33 @@ void _start_c(void *boot_args, void *base)
 }
 
 /* Secondary SMP core boot */
+/*
+ * Wake from suspend to RAM: the A12 brings the boot CPU out of reset at its
+ * IORVBAR, which points here. Linux stores its resume entry (physical, MMU
+ * off) in this slot before it sleeps; the slot's address is in the FDT as
+ * /chosen/apple,m1n1-resume. The CPU comes back with its implementation
+ * registers reset, so init_cpu() redoes them before Linux runs. Nothing is
+ * printed on that path: the UART may still be powered down.
+ */
+volatile u64 m1n1_resume_entry __attribute__((aligned(64)));
+
+static void __attribute__((noreturn)) resume_os(u64 entry)
+{
+    m1n1_resume_entry = 0;
+    sysop("dsb sy");
+    ((void (*)(u64))entry)(0);
+    while (1)
+        ;
+}
+
 void _cpu_reset_c(void *stack)
 {
+    if (is_boot_cpu() && m1n1_resume_entry) {
+        u64 entry = m1n1_resume_entry;
+        init_cpu();
+        resume_os(entry);
+    }
+
     if (!is_boot_cpu())
         uart_puts("RVBAR entry on secondary CPU");
     else

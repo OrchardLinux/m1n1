@@ -60,6 +60,19 @@ u64 boot_cpu_mpidr = 0;
 void smp_secondary_entry(void)
 {
     struct spin_table *me = &spin_table[target_cpu];
+    u64 mpidr = mrs(MPIDR_EL1) & 0xFFFFFF;
+
+    /*
+     * A core the OS powered off and started again comes back through its
+     * IORVBAR without m1n1 having set target_cpu: find its table by MPIDR.
+     */
+    for (int i = 0; i < MAX_CPUS; i++) {
+        if (spin_table[i].flag && spin_table[i].mpidr == mpidr) {
+            target_cpu = i;
+            me = &spin_table[i];
+            break;
+        }
+    }
 
     if (in_el2())
         msr(TPIDR_EL2, target_cpu);
@@ -124,8 +137,20 @@ static void smp_start_cpu(int index, int die, int cluster, int core, u64 impl, u
     if (spin_table[index].flag)
         return;
 
-    if (!cpu_features->apple_sysregs_unlocked &&
-        (read64(impl) & RVBAR_ADDR) != (u64)_vectors_start) {
+    if (chip_id == T8020 || chip_id == T8030) {
+        /*
+         * A13 runs with features_unknown (no A12/A13 entry in midr_parts[]),
+         * so the generic path below would leave RVBAR alone. IORVBAR is MMIO,
+         * writable from EL1 as long as iBoot did not lock it: point it at our
+         * vectors if it is unlocked, and say what we found either way.
+         */
+        u64 rvbar = read64(impl);
+        if (!(rvbar & RVBAR_LOCK))
+            write64(impl, (u64)_vectors_start);
+        printf("RVBAR @0x%lx: 0x%lx -> 0x%lx (vectors 0x%lx)\n", impl, rvbar, read64(impl),
+               (u64)_vectors_start);
+    } else if (!cpu_features->apple_sysregs_unlocked &&
+               (read64(impl) & RVBAR_ADDR) != (u64)_vectors_start) {
         printf("Failed! \n    RVBAR (=0x%lx) is locked and differs from entry point (=0x%lx)\n",
                read64(impl) & RVBAR_ADDR, (u64)_vectors_start);
     }
@@ -290,6 +315,8 @@ void smp_start_secondaries(void)
         case T8011:
         case T8012:
         case T8015:
+        case T8020: // A12: PMGR CPU start layout exposed by function-enable_core
+        case T8030: // A13: PMGR CPU start at 0xd4004/0xd4008 as on A11
             cpu_start_off = CPU_START_OFF_S8000;
             break;
         case T8103:
@@ -487,6 +514,24 @@ u64 smp_wait(int cpu)
         sysop("dmb sy");
 
     return target->retval;
+}
+
+/* What a core re-entering through IORVBAR with caches off reads, to RAM. */
+void smp_clean_for_reentry(void)
+{
+    extern volatile u64 m1n1_resume_entry;
+    extern volatile bool m1n1_os_running;
+
+    m1n1_os_running = true;
+    dc_civac_range((void *)&m1n1_os_running, sizeof(m1n1_os_running));
+    dc_civac_range(&boot_cpu_idx, sizeof(boot_cpu_idx));
+    dc_civac_range(&boot_cpu_mpidr, sizeof(boot_cpu_mpidr));
+    dc_civac_range((void *)&wfe_mode, sizeof(wfe_mode));
+    dc_civac_range(&target_cpu, sizeof(target_cpu));
+    dc_civac_range(&_reset_stack, sizeof(_reset_stack));
+    dc_civac_range(spin_table, sizeof(spin_table));
+    dc_civac_range((void *)&m1n1_resume_entry, sizeof(m1n1_resume_entry));
+    sysop("dsb sy");
 }
 
 void smp_set_wfe_mode(bool new_mode)

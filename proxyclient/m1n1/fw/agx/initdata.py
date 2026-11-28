@@ -923,7 +923,7 @@ class AGXHWDataA(ConstructClass):
         self.unk_c58_4 = 0
 
         # Note: integer rounding
-        avg_power_filter_tc_periods = sgx.gpu_avg_power_filter_tc_ms // period_ms
+        avg_power_filter_tc_periods = sgx.getprop("gpu-avg-power-filter-tc-ms", 1008) // period_ms
         gpu_avg_power_filter_tc_ms_round = avg_power_filter_tc_periods * period_ms
 
         self.avg_power_filter_tc_periods_x4 = avg_power_filter_tc_periods * 4
@@ -947,7 +947,7 @@ class AGXHWDataA(ConstructClass):
         self.max_power_7 = chip_info.max_power
         self.max_power_8 = chip_info.max_power
         self.unk_d48 = 0
-        self.avg_power_filter_tc_ms = sgx.gpu_avg_power_filter_tc_ms
+        self.avg_power_filter_tc_ms = sgx.getprop("gpu-avg-power-filter-tc-ms", 1008)
         self.unk_d50 = 0
         self.avg_power_filter_tc_clks = gpu_avg_power_filter_tc_ms_round * base_clock_khz
         self.unk_d54_4 = bytes(0xc)
@@ -1933,7 +1933,7 @@ class InitData_RegionC(ConstructClass):
 
     def __init__(self, sgx, chip_info):
         period_ms = sgx.gpu_power_sample_period
-        avg_power_filter_tc_periods = sgx.gpu_avg_power_filter_tc_ms // period_ms
+        avg_power_filter_tc_periods = sgx.getprop("gpu-avg-power-filter-tc-ms", 1008) // period_ms
 
         self.ktrace_enable = 0# 0xffffffff
         self.unk_4 = bytes(0x20)

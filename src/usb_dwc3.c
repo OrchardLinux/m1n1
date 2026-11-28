@@ -965,9 +965,14 @@ static void usb_dwc3_cdc_handle_bulk_out_xfer_done(dwc3_dev_t *dev,
     ringbuffer_t *host2device = usb_dwc3_cdc_get_ringbuffer(dev, event.endpoint_number);
     if (!host2device)
         return;
-    size_t len = min(XFER_SIZE, ringbuffer_get_free(host2device));
+    /*
+     * Only BUFSIZ (bits 23:0) is the length left: the A13's dwc3 also sets
+     * bit 26 in the completed TRB, which made the length negative and
+     * pushed the whole buffer (0xaa filler) into the ring.
+     */
+    size_t got = XFER_SIZE - DWC3_TRB_SIZE_LENGTH(dev->endpoints[event.endpoint_number].trb->size);
     ringbuffer_write(dev->endpoints[event.endpoint_number].xfer_buffer,
-                     len - dev->endpoints[event.endpoint_number].trb->size, host2device);
+                     min(got, ringbuffer_get_free(host2device)), host2device);
 }
 
 static void usb_dwc3_handle_event_ep(dwc3_dev_t *dev, const struct dwc3_event_depevt event)

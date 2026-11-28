@@ -114,7 +114,7 @@ struct copy_rule copy_rules[] = {
         .fw_param = PARAM_MAP_RANGE,
         .blobsize = 16,
         .keyed = true,
-        .keys = {SPACER, SPACER, SPACER, "MISC", NULL},
+        .keys = {"MINI", "APOA", "GPOA", "MISC", NULL},
     },
     {
         .prop = "dmashim",

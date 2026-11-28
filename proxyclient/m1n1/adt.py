@@ -535,6 +535,7 @@ class ADTNode:
             path = self._parent_path + _name
 
             raw = {}
+            kept_raw = set()
             for p in val.properties:
                 raw[p.name] = p.value
                 is_template = bool(p.size & 0x80000000)
@@ -543,12 +544,17 @@ class ADTNode:
                     self._types[p.name] = t, is_template
                     self._properties[p.name] = v
                 except Exception as e:
-                    print(f"Exception parsing {path}.{p.name} value {p.value.hex()}:", file=sys.stderr)
-                    raise
+                    # iPhone ADTs carry properties m1n1 has typed for Macs
+                    # (e.g. aop-audio/audio-haptic-leap.identifier): keep the
+                    # bytes rather than refuse the whole tree
+                    print(f"ADT: {path}.{p.name} kept as bytes ({e.__class__.__name__})", file=sys.stderr)
+                    self._types[p.name] = None, is_template
+                    self._properties[p.name] = p.value
+                    kept_raw.add(p.name)
 
             # Second pass
             for k, (t, is_template) in self._types.items():
-                if t is None:
+                if t is None and k not in kept_raw:
                     t, v = parse_prop(self, path, _name, k, self._properties[k], is_template)
                     self._types[k] = t, is_template
                     self._properties[k] = v
