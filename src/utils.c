@@ -11,10 +11,10 @@
 #include "nvme.h"
 #endif
 #include "iodev.h"
+#include "memory.h"
 #include "smp.h"
 #include "types.h"
 #include "utils.h"
-#include "memory.h"
 #include "vsprintf.h"
 #include "xnuboot.h"
 

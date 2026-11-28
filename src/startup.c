@@ -10,7 +10,6 @@
 #include "types.h"
 #include "uart.h"
 #include "utils.h"
-
 #include "xnuboot.h"
 
 u64 boot_args_addr;
