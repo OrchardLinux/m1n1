@@ -40,3 +40,38 @@ jobs:
           path: |
             build/m1n1.macho
             build/m1n1.bin
+
+  # The 32-bit m1n1 for Apple's ARMv7 chips, built as orchard builds it
+  # (boot/m1n1/build there), so a change that breaks it fails here first.
+  build-armv7:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install LLVM 19
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang-19 lld-19 llvm-19
+
+      # orchard's toolchain (boot/m1n1/install-toolchain there): the 32-bit
+      # m1n1 is position independent, so it builds core and alloc itself
+      # from rust-src.
+      - name: Install Rust 1.90.0 with armv7a-none-eabi and rust-src
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal
+          rustup default 1.90.0
+          rustup target add --toolchain 1.90.0 armv7a-none-eabi
+          rustup component add --toolchain 1.90.0 rust-src
+
+      - name: Build
+        run: >-
+          make -j2 M1N1_ARCH=arm USE_CLANG=1 CHAINLOADING=1
+          TOOLCHAIN=/usr/lib/llvm-19/bin/ LLDDIR=/usr/lib/llvm-19/bin/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: m1n1-armv7
+          path: build/m1n1-armv7.macho

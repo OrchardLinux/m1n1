@@ -912,25 +912,19 @@ static void usb_dwc2_ep0_handle_setup(dwc2_dev_t *dev)
     }
 }
 
-#define T8020_DMA_CACHE_LINE 64
-
+/*
+ * The range helpers exist in the 64-bit and the 32-bit build alike (the
+ * single-line dc_ivac/dc_cvac macros only in the 64-bit one).
+ */
 static void usb_dwc2_dma_invalidate(void *addr, size_t len)
 {
-    u64 start = (u64)addr & ~(u64)(T8020_DMA_CACHE_LINE - 1);
-    u64 end = (u64)addr + len;
-
-    for (u64 q = start; q < end; q += T8020_DMA_CACHE_LINE)
-        dc_ivac((void *)q);
+    dc_ivac_range(addr, len);
     sysop("dsb sy");
 }
 
 static void usb_dwc2_dma_clean(void *addr, size_t len)
 {
-    u64 start = (u64)addr & ~(u64)(T8020_DMA_CACHE_LINE - 1);
-    u64 end = (u64)addr + len;
-
-    for (u64 q = start; q < end; q += T8020_DMA_CACHE_LINE)
-        dc_cvac((void *)q);
+    dc_cvac_range(addr, len);
     sysop("dsb sy");
 }
 
