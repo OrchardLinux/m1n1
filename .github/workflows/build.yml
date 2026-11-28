@@ -56,9 +56,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y clang-19 lld-19 llvm-19
 
-      - name: Install armv7a-none-eabi rust target
+      # orchard's toolchain (boot/m1n1/install-toolchain there): the 32-bit
+      # m1n1 is position independent, so it builds core and alloc itself
+      # from rust-src.
+      - name: Install Rust 1.90.0 with armv7a-none-eabi and rust-src
         run: |
-          rustup target install armv7a-none-eabi
+          rustup toolchain install 1.90.0 --profile minimal
+          rustup default 1.90.0
+          rustup target add --toolchain 1.90.0 armv7a-none-eabi
+          rustup component add --toolchain 1.90.0 rust-src
 
       - name: Build
         run: >-
